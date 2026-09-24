@@ -16,3 +16,6 @@ renovate.json
 tsconfig.build.json
 vitest.config.ts
 docker-compose.yml
+
+# packed tarballs
+*.tgz
