@@ -22,9 +22,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The oldest supported Node.js line and the current one, against both
+        # The oldest Node.js line vitest 5 runs on and the current one, against both
         # supported NestJS majors.
-        node-version: [20, 24]
+        node-version: [22, 24]
         nestjs-version: ['11', '12']
     services:
       postgres:
