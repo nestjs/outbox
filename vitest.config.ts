@@ -16,7 +16,7 @@ export default defineConfig({
     include: ['tests/**/*.spec.ts'],
     globals: true,
     // Generates the Prisma store recipe's client (tests/integration.ts), offline.
-    globalSetup: ['tests/support/generate-prisma-client.ts'],
+    globalSetup: ['tests/support/generate-prisma-client.ts', 'tests/support/global-setup.ts'],
     setupFiles: ['reflect-metadata'],
   },
 });

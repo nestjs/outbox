@@ -201,9 +201,9 @@ function freePort(): Promise<number> {
  * `<prefix><name>_<pid>_<random>`; `url(name)` and `createDatabase(name)` agree on it.
  *
  * Nothing is dropped except this helper's own databases: `stop()` (awaited in `afterAll`) drops
- * the ones this process created, and `sweepStaleDatabases()` (at a process's first
- * `createDatabase()`) drops those under `databasePrefix` whose process is gone: a run that
- * crashed or was interrupted before its `afterAll`.
+ * the ones this process created, and `sweepStaleDatabases()` (at the first `createDatabase()`
+ * and in the global setup and teardown) drops those under `databasePrefix` whose process is
+ * gone: a run that crashed or was interrupted before its `afterAll`.
  */
 function externalPostgres(connectionString: string): TestPostgresResult {
   const base = new URL(connectionString);
