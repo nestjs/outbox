@@ -6,9 +6,10 @@
  * suite can skip with a clear message instead of failing.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 export interface TestPostgres {
@@ -17,17 +18,24 @@ export interface TestPostgres {
   url(database?: string): string;
   /** Creates a database (dropping a previous one with the same name) and returns its URL. */
   createDatabase(name: string): Promise<string>;
-  stop(): void;
+  /** Stops the throwaway cluster, or drops this process's databases on an external server. Await it. */
+  stop(): Promise<void>;
 }
 
 export type TestPostgresResult = { postgres: TestPostgres; reason?: undefined } | { postgres: null; reason: string };
 
 export async function startPostgres(): Promise<TestPostgresResult> {
-  if (process.env.SQL_TEST_PG_URL) return externalPostgres(process.env.SQL_TEST_PG_URL);
+  if (process.env.SQL_TEST_PG_URL) {
+    return externalPostgres(process.env.SQL_TEST_PG_URL);
+  }
   const bin = findBinDir();
-  if (!bin) return { postgres: null, reason: 'initdb/pg_ctl/postgres not found (set SQL_TEST_PG_BIN)' };
+  if (!bin) {
+    return { postgres: null, reason: 'initdb/pg_ctl/postgres not found (set SQL_TEST_PG_BIN)' };
+  }
   const runnable = runnableBinDir(bin);
-  if ('reason' in runnable) return { postgres: null, reason: runnable.reason };
+  if ('reason' in runnable) {
+    return { postgres: null, reason: runnable.reason };
+  }
 
   const dir = mkdtempSync(join(tmpdir(), 'nest-sql-pg-'));
   const data = join(dir, 'data');
@@ -59,8 +67,11 @@ export async function startPostgres(): Promise<TestPostgresResult> {
 
   const url = (database = 'postgres') => `postgres://postgres@127.0.0.1:${port}/${database}`;
   let stopped = false;
+  // Synchronous, so it also runs from the 'exit' hook below.
   const stop = () => {
-    if (stopped) return;
+    if (stopped) {
+      return;
+    }
     stopped = true;
     spawnSync(join(runnable.dir, 'pg_ctl'), ['-D', data, '-m', 'immediate', '-w', 'stop'], { stdio: 'pipe', env: runnable.env });
     rmSync(dir, { recursive: true, force: true });
@@ -73,7 +84,7 @@ export async function startPostgres(): Promise<TestPostgresResult> {
     postgres: {
       port,
       url,
-      stop,
+      stop: async () => stop(),
       async createDatabase(name) {
         const { default: pg } = await import('pg');
         const client = new pg.Client({ connectionString: url() });
@@ -93,7 +104,9 @@ export async function startPostgres(): Promise<TestPostgresResult> {
 function findBinDir(): string | undefined {
   const candidates = [process.env.SQL_TEST_PG_BIN, '/usr/local/bin', '/opt/homebrew/bin', '/usr/lib/postgresql/16/bin', '/usr/lib/postgresql/15/bin', '/usr/lib/postgresql/14/bin'];
   for (const dir of candidates) {
-    if (dir && ['initdb', 'pg_ctl', 'postgres'].every((name) => existsSync(join(dir, name)))) return dir;
+    if (dir && ['initdb', 'pg_ctl', 'postgres'].every((name) => existsSync(join(dir, name)))) {
+      return dir;
+    }
   }
   const which = spawnSync('which', ['initdb'], { encoding: 'utf8' });
   return which.status === 0 ? dirname(which.stdout.trim()) : undefined;
@@ -110,7 +123,9 @@ function findBinDir(): string | undefined {
 function runnableBinDir(bin: string): { dir: string; env: NodeJS.ProcessEnv; dispose(): void } | { reason: string } {
   const env = { ...process.env, LC_ALL: 'C' };
   const probe = spawnSync(join(bin, 'postgres'), ['-V'], { encoding: 'utf8', env });
-  if (probe.status === 0) return { dir: bin, env, dispose: () => {} };
+  if (probe.status === 0) {
+    return { dir: bin, env, dispose: () => {} };
+  }
 
   const missing = /Library not loaded: (\S+)/.exec(probe.stderr ?? '')?.[1];
   const libraryDir = missing && findLibrary(missing.split('/').pop()!);
@@ -123,8 +138,12 @@ function runnableBinDir(bin: string): { dir: string; env: NodeJS.ProcessEnv; dis
   mkdirSync(join(wrapper, 'bin'));
   // initdb and pg_ctl find `postgres` next to their own resolved path, and share/ and lib/
   // one level up: copies (not symlinks) in bin/, symlinks for the rest.
-  for (const name of ['initdb', 'pg_ctl']) copyFileSync(realpathSync(join(bin, name)), join(wrapper, 'bin', name));
-  for (const name of ['share', 'lib']) symlinkSync(join(prefix, name), join(wrapper, name));
+  for (const name of ['initdb', 'pg_ctl']) {
+    copyFileSync(realpathSync(join(bin, name)), join(wrapper, 'bin', name));
+  }
+  for (const name of ['share', 'lib']) {
+    symlinkSync(join(prefix, name), join(wrapper, name));
+  }
   const variable = process.platform === 'darwin' ? 'DYLD_LIBRARY_PATH' : 'LD_LIBRARY_PATH';
   writeFileSync(join(wrapper, 'bin', 'postgres'), `#!/bin/sh\n${variable}='${libraryDir}' exec '${real}' "$@"\n`);
   chmodSync(join(wrapper, 'bin', 'postgres'), 0o755);
@@ -140,12 +159,16 @@ function runnableBinDir(bin: string): { dir: string; env: NodeJS.ProcessEnv; dis
 
 function findLibrary(file: string): string | undefined {
   for (const cellar of ['/usr/local/Cellar', '/opt/homebrew/Cellar']) {
-    if (!existsSync(cellar)) continue;
+    if (!existsSync(cellar)) {
+      continue;
+    }
     for (const formula of readdirSync(cellar)) {
       const formulaDir = join(cellar, formula);
       for (const version of safeReaddir(formulaDir)) {
         const lib = join(formulaDir, version, 'lib');
-        if (existsSync(join(lib, file))) return lib;
+        if (existsSync(join(lib, file))) {
+          return lib;
+        }
       }
     }
   }
@@ -174,46 +197,104 @@ function freePort(): Promise<number> {
 /**
  * `SQL_TEST_PG_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres` runs the Postgres
  * targets on an existing server instead of a throwaway cluster, e.g. a local container.
- * Several test files share it, so every database gets a per-process suffix; `url(name)` and
- * `createDatabase(name)` agree on it, and nothing is dropped except this process's databases.
+ * Several test files share it, so every database this helper creates is named
+ * `<prefix><name>_<pid>_<random>`; `url(name)` and `createDatabase(name)` agree on it.
+ *
+ * Nothing is dropped except this helper's own databases: `stop()` (awaited in `afterAll`) drops
+ * the ones this process created, and `sweepStaleDatabases()` (at a process's first
+ * `createDatabase()`) drops those under `databasePrefix` whose process is gone: a run that
+ * crashed or was interrupted before its `afterAll`.
  */
 function externalPostgres(connectionString: string): TestPostgresResult {
   const base = new URL(connectionString);
   const suffix = `_${process.pid}_${Math.random().toString(36).slice(2, 8)}`;
   const created: string[] = [];
+  let swept: Promise<unknown> | undefined;
   const url = (database = 'postgres') => {
     const target = new URL(base);
-    target.pathname = `/${database === 'postgres' ? base.pathname.slice(1) || 'postgres' : database + suffix}`;
+    target.pathname = `/${database === 'postgres' ? base.pathname.slice(1) || 'postgres' : databasePrefix + database + suffix}`;
     return target.toString();
   };
   return {
     postgres: {
       port: Number(base.port || 5432),
       url,
-      stop() {
-        if (created.length === 0) return;
+      async stop() {
         const names = created.splice(0);
-        void (async () => {
-          const { default: pg } = await import('pg');
-          const client = new pg.Client({ connectionString: url() });
-          await client.connect().catch(() => undefined);
-          for (const name of names) await client.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`).catch(() => undefined);
-          await client.end().catch(() => undefined);
-        })();
+        if (names.length === 0) {
+          return;
+        }
+
+        await withClient(connectionString, async (client) => {
+          for (const name of names) {
+            await client.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+          }
+        });
       },
       async createDatabase(name) {
-        const { default: pg } = await import('pg');
-        const client = new pg.Client({ connectionString: url() });
-        await client.connect();
-        try {
-          await client.query(`DROP DATABASE IF EXISTS "${name + suffix}" WITH (FORCE)`);
-          await client.query(`CREATE DATABASE "${name + suffix}"`);
-          created.push(name + suffix);
-        } finally {
-          await client.end();
-        }
+        await (swept ??= sweepStaleDatabases(connectionString));
+        const database = databasePrefix + name + suffix;
+        await withClient(connectionString, async (client) => {
+          await client.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+          await client.query(`CREATE DATABASE "${database}"`);
+        });
+        created.push(database);
         return url(name);
       },
     },
   };
+}
+
+/**
+ * What every database this helper creates on an external server starts with: the package, and
+ * this host (a server shared by several machines never sees one sweep another's databases).
+ */
+export const databasePrefix = `obx_${createHash('sha256').update(hostname()).digest('hex').slice(0, 6)}_`;
+
+/**
+ * Drops this helper's databases (`databasePrefix`) whose process is no longer alive. Never
+ * touches any other database, nor one whose process still runs.
+ */
+export async function sweepStaleDatabases(connectionString: string): Promise<string[]> {
+  return withClient(connectionString, async (client) => {
+    const { rows } = await client.query<{ datname: string }>('SELECT datname FROM pg_database WHERE left(datname, $1) = $2', [
+      databasePrefix.length,
+      databasePrefix,
+    ]);
+    const dropped: string[] = [];
+    for (const { datname } of rows) {
+      const pid = Number(/_(\d+)_[a-z0-9]+$/.exec(datname)?.[1]);
+      if (!Number.isSafeInteger(pid) || pid === process.pid || isAlive(pid)) {
+        continue;
+      }
+
+      // Another process sweeping at the same time may drop it first.
+      await client.query(`DROP DATABASE IF EXISTS "${datname}" WITH (FORCE)`).then(
+        () => dropped.push(datname),
+        () => undefined,
+      );
+    }
+    return dropped;
+  });
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM: it exists, it's just not ours to signal.
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+async function withClient<T>(connectionString: string, work: (client: import('pg').Client) => Promise<T>): Promise<T> {
+  const { default: pg } = await import('pg');
+  const client = new pg.Client({ connectionString });
+  await client.connect();
+  try {
+    return await work(client);
+  } finally {
+    await client.end();
+  }
 }
