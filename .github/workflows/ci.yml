@@ -51,7 +51,9 @@ jobs:
       - name: Install dependencies
         run: npm install
       - name: Install NestJS ${{ matrix.nestjs-version }}
-        run: npm install --no-save @nestjs/common@${{ matrix.nestjs-version }} @nestjs/core@${{ matrix.nestjs-version }} @nestjs/testing@${{ matrix.nestjs-version }} @nestjs/platform-express@${{ matrix.nestjs-version }} @nestjs/microservices@${{ matrix.nestjs-version }}
+        # The strict install above already checked the tree. Swapping only some @nestjs packages
+        # to 11 conflicts with the optional peers the rest of the 12.x tree declares.
+        run: npm install --no-save --legacy-peer-deps @nestjs/common@${{ matrix.nestjs-version }} @nestjs/core@${{ matrix.nestjs-version }} @nestjs/testing@${{ matrix.nestjs-version }} @nestjs/platform-express@${{ matrix.nestjs-version }} @nestjs/microservices@${{ matrix.nestjs-version }}
       - name: Typecheck
         run: npx tsc -p tsconfig.json --noEmit
       - name: e2e tests
