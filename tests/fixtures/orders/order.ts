@@ -1,5 +1,5 @@
 export interface OrderItem {
-  bookId: string;
+  productId: string;
   quantity: number;
   /** Unit price in cents, copied from the catalog when the order is placed. */
   price: number;

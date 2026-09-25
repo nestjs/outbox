@@ -53,7 +53,7 @@ class OrdersService {
       await this.outbox.add(tx, {
         topic: 'order.placed',
         key: `order-${orderId}`,
-        headers: { 'x-tenant': 'acme' },
+        headers: { 'x-tenant': 'tenant-7' },
         payload: { orderId },
       });
     });
@@ -149,7 +149,7 @@ for (const target of targets) {
       expect(envelope).toMatchObject({
         topic: 'order.placed',
         key: 'order-1',
-        headers: { 'x-tenant': 'acme' },
+        headers: { 'x-tenant': 'tenant-7' },
         payload: { orderId: 1 },
       });
       expect(events.find((e) => e.type === 'published')).toMatchObject({
@@ -227,7 +227,7 @@ describe('ClientProxyTransport (forRootAsync, toPacket)', () => {
       const outbox = moduleRef.get(Outbox);
       const [message] = await db.transaction((tx) =>
         outbox.add(tx, [
-          { topic: 'order.placed', key: 'order-1', headers: { 'x-tenant': 'acme' }, payload: { orderId: 1 } },
+          { topic: 'order.placed', key: 'order-1', headers: { 'x-tenant': 'tenant-7' }, payload: { orderId: 1 } },
         ]),
       );
 
@@ -237,12 +237,12 @@ describe('ClientProxyTransport (forRootAsync, toPacket)', () => {
           'order.placed',
           {
             key: 'order-1',
-            headers: { 'x-tenant': 'acme' },
+            headers: { 'x-tenant': 'tenant-7' },
             value: {
               id: message!.id,
               topic: 'order.placed',
               key: 'order-1',
-              headers: { 'x-tenant': 'acme' },
+              headers: { 'x-tenant': 'tenant-7' },
               createdAt: message!.createdAt,
               payload: { orderId: 1 },
             },

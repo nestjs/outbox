@@ -259,7 +259,7 @@ for (const target of targets) {
 
     it('publishes a message added inside a committed transaction', async () => {
       await boot();
-      await orders.place(1, [placed(1, { key: 'customer-7', headers: { 'x-tenant': 'acme' } })]);
+      await orders.place(1, [placed(1, { key: 'customer-7', headers: { 'x-tenant': 'tenant-7' } })]);
       await settle();
 
       const [call] = callsOf('billing');
@@ -271,7 +271,7 @@ for (const target of targets) {
           id: call!.id,
           topic: 'order.placed',
           key: 'customer-7',
-          headers: { 'x-tenant': 'acme' },
+          headers: { 'x-tenant': 'tenant-7' },
           payload: { orderId: 1 },
           attempts: 0,
         },

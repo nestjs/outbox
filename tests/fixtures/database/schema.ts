@@ -3,9 +3,9 @@ import type { OutboxAttempt, OutboxDeadLetterReason } from '../../../lib/index.j
 import { bigint, index, integer, jsonb, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
 import type { OrderItem } from '../orders/order.js';
 
-export const books = pgTable('books', {
+export const products = pgTable('products', {
   id: text('id').primaryKey(),
-  title: text('title').notNull(),
+  name: text('name').notNull(),
   /** In cents. */
   price: integer('price').notNull(),
   inStock: integer('in_stock').notNull(),
