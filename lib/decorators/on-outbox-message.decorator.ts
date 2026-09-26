@@ -17,6 +17,16 @@ export function OnOutboxMessage(
   topic: string | string[],
   options: OnOutboxMessageOptions,
 ): MethodDecorator {
+  const topics = Array.isArray(topic) ? topic : [topic];
+  if (
+    topics.length === 0 ||
+    topics.some((t) => typeof t !== 'string' || t === '')
+  ) {
+    throw new TypeError(
+      `@OnOutboxMessage(${JSON.stringify(topic)}) needs a topic: a non-empty string or array of non-empty strings.`,
+    );
+  }
+
   if (typeof options?.consumer !== 'string' || options.consumer === '') {
     throw new TypeError(
       `@OnOutboxMessage(${JSON.stringify(topic)}) needs { consumer }: the name its inbox ` +
@@ -30,7 +40,7 @@ export function OnOutboxMessage(
       Reflect.getMetadata(OUTBOX_HANDLER_METADATA, handler) ?? [];
     Reflect.defineMetadata(
       OUTBOX_HANDLER_METADATA,
-      [...existing, { ...options, topics: Array.isArray(topic) ? topic : [topic] }],
+      [...existing, { ...options, topics }],
       handler,
     );
 
