@@ -152,6 +152,11 @@ function assertInstance<T>(option: string, value: T, valid: (value: T) => boolea
 }
 
 function assertTransportName(name: string) {
+  if (typeof name !== 'string' || name.trim() === '') {
+    throw new Error(
+      'OutboxModule: transport name cannot be empty. Give the transport in `transports` a name.',
+    );
+  }
   if (name === LOCAL_TRANSPORT) {
     throw new Error(
       `OutboxModule: "${LOCAL_TRANSPORT}" is the built-in in-process transport; ` +

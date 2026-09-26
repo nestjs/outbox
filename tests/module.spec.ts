@@ -273,6 +273,19 @@ describe('OutboxModule configuration', () => {
     );
   });
 
+  it('refuses an empty transport name in transports', () => {
+    expect(() =>
+      OutboxModule.forRoot({
+        transports: { '': { publish: async () => undefined } },
+      }),
+    ).toThrow('OutboxModule: transport name cannot be empty. Give the transport in `transports` a name.');
+    expect(() =>
+      OutboxModule.forRoot({
+        transports: { '   ': { publish: async () => undefined } },
+      }),
+    ).toThrow('OutboxModule: transport name cannot be empty. Give the transport in `transports` a name.');
+  });
+
   it('refuses handlers on request-scoped providers instead of ignoring them', async () => {
     @Injectable({ scope: Scope.REQUEST })
     class ScopedHandlers {

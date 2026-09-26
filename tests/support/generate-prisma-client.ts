@@ -10,6 +10,7 @@ export default function generatePrismaClient() {
   const result = spawnSync('npm', ['run', '--silent', 'generate:prisma'], {
     cwd: fileURLToPath(new URL('../..', import.meta.url)),
     encoding: 'utf8',
+    shell: true,
   });
   if (result.status !== 0) {
     throw new Error(`prisma generate failed:\n${result.stderr || result.stdout}`);

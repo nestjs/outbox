@@ -148,6 +148,27 @@ describe('@OnOutboxMessage handlers', () => {
     await expect(boot([OrderHandlers, Duplicate])).rejects.toThrow('Duplicate outbox consumer "crm" for topic "order.placed"');
   });
 
+  it('refuses invalid topic or consumer options at decorator time', () => {
+    expect(() => OnOutboxMessage('', { consumer: 'crm' })).toThrow(
+      '@OnOutboxMessage("") needs a topic: a non-empty string or array of non-empty strings.',
+    );
+    expect(() => OnOutboxMessage([], { consumer: 'crm' })).toThrow(
+      '@OnOutboxMessage([]) needs a topic: a non-empty string or array of non-empty strings.',
+    );
+    expect(() => OnOutboxMessage(['order.placed', ''], { consumer: 'crm' })).toThrow(
+      '@OnOutboxMessage(["order.placed",""]) needs a topic: a non-empty string or array of non-empty strings.',
+    );
+    expect(() => OnOutboxMessage(null as any, { consumer: 'crm' })).toThrow(
+      '@OnOutboxMessage(null) needs a topic: a non-empty string or array of non-empty strings.',
+    );
+    expect(() => OnOutboxMessage('order.placed', {} as any)).toThrow(
+      '@OnOutboxMessage("order.placed") needs { consumer }',
+    );
+    expect(() => OnOutboxMessage('order.placed', { consumer: '' })).toThrow(
+      '@OnOutboxMessage("order.placed") needs { consumer }',
+    );
+  });
+
   it('retries a message no handler in this process subscribes to (another version may)', async () => {
     const ref = await boot([OrderHandlers]);
     const result = await publish(ref, { topic: 'order.archived', payload: {} });
