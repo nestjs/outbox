@@ -6,6 +6,7 @@ import type { Awaitable } from './interfaces/awaitable.interface.js';
 import { OutboxRelay } from './services/outbox-relay.service.js';
 import type { OutboxStore } from './interfaces/outbox-store.interface.js';
 import { OutboxStorage } from './storage/outbox.storage.js';
+import { isName } from './utils/name.util.js';
 import { uuidv7 } from './utils/uuid.util.js';
 
 /**
@@ -54,7 +55,7 @@ export class Outbox<Tx = unknown> {
 }
 
 function build<P>(input: NewOutboxMessage<P>, now: number): OutboxMessage<P> {
-  if (typeof input?.topic !== 'string' || input.topic === '') {
+  if (!isName(input?.topic)) {
     throw new TypeError('Outbox message needs a topic (a non-empty string)');
   }
   if (input.key !== undefined && input.key !== null && typeof input.key !== 'string') {

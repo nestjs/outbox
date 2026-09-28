@@ -8,6 +8,7 @@ import {
 import type { OutboxModuleOptions } from './interfaces/outbox-module-options.interface.js';
 import type { OutboxTransport } from './transports/outbox.transport.js';
 import { LOCAL_TRANSPORT } from './outbox.constants.js';
+import { isName } from './utils/name.util.js';
 
 /**
  * The top level of both `forRoot()` and `forRootAsync()`. Classes Nest instantiates go
@@ -152,6 +153,11 @@ function assertInstance<T>(option: string, value: T, valid: (value: T) => boolea
 }
 
 function assertTransportName(name: string) {
+  if (!isName(name)) {
+    throw new Error(
+      'OutboxModule: transport name cannot be empty. Give the transport in `transports` a name.',
+    );
+  }
   if (name === LOCAL_TRANSPORT) {
     throw new Error(
       `OutboxModule: "${LOCAL_TRANSPORT}" is the built-in in-process transport; ` +

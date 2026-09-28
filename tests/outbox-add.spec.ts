@@ -105,6 +105,7 @@ describe('Outbox.add()', () => {
     const cases: [unknown, RegExp][] = [
       [{ payload: {} }, /needs a topic \(a non-empty string\)/],
       [{ topic: '', payload: {} }, /needs a topic/],
+      [{ topic: '   ', payload: {} }, /needs a topic/],
       [{ topic: 42, payload: {} }, /needs a topic/],
       [{ topic: 'a', payload: {}, key: 7 }, /`key` must be a string or null \(got number\)/],
       [{ topic: 'a', payload: undefined }, /payload must be JSON-serializable/],
