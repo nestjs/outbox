@@ -152,6 +152,8 @@ for (const target of targets) {
         headers: { 'x-tenant': 'tenant-7' },
         payload: { orderId: 1 },
       });
+      // The relay emits `published` once markPublished() returns, a moment after the consumer has the envelope.
+      await until(() => events.some((e) => e.type === 'published'));
       expect(events.find((e) => e.type === 'published')).toMatchObject({
         transport: 'broker',
         message: { id: envelope!.id },
