@@ -1,14 +1,15 @@
 /**
  * What MySqlOutboxStore does beyond the contract, on MySQL: a large batch in a few statements of one JSON parameter each,
  * lock rows for keyed messages only, times with a fraction of a millisecond, the inputs a column would refuse (a key,
- * id, topic, consumer or owner longer than its column fails clearly, before any statement), keys, ids, topics and
+ * id, topic, consumer or owner longer than its column fails clearly, before any statement: in `OutboxInbox.process()`,
+ * before the handler runs), keys, ids, topics and
  * consumers that differ only in case, accents or a trailing space kept apart, payloads round-tripping, each value bound to
  * its own placeholder (MySQL binds `?` by position), a requeue that meets a pending message with the same id, dead
  * letters of one moment in byte order, `stats()` and a claim on a key of 20,000 messages, and registering itself for
  * both contracts.
  */
 import { randomUUID } from 'node:crypto';
-import { OutboxStorage } from '../../lib/index.js';
+import { OutboxInbox, OutboxStorage } from '../../lib/index.js';
 import { MySqlOutboxStore } from '../../lib/mysql/index.js';
 import { silentLogger } from '../helpers.js';
 import { message, mysql2Client, onMysql, recording, rows, testDatabase, truncate, type Client } from './support.js';
@@ -103,6 +104,8 @@ describe(`MySqlOutboxStore through ${mysql2Client.name}`, () => {
       [() => client.transaction((tx) => store.add(tx, [message(long)])), 'MySqlOutboxStore.add(): a topic is at most 255'],
       [() => store.recordInbox(undefined, long, 'm-1', 1), 'MySqlOutboxStore.recordInbox(): a consumer name is at most 255'],
       [() => client.transaction((tx) => store.recordInbox(tx, 'billing', long, 1)), 'MySqlOutboxStore.recordInbox(): a message id is at most 255'],
+      [() => store.hasInbox(long, 'm-1'), 'MySqlOutboxStore.hasInbox(): a consumer name is at most 255'],
+      [() => store.hasInbox('billing', long), 'MySqlOutboxStore.hasInbox(): a message id is at most 255'],
       [() => store.claim({ owner: long, now: 10, leaseMs: 1_000, limit: 10 }), 'MySqlOutboxStore.claim(): a lease owner is at most 255'],
     ];
     for (const [call, text] of refusals) {
@@ -119,6 +122,27 @@ describe(`MySqlOutboxStore through ${mysql2Client.name}`, () => {
     expect((await claimAll()).map((m) => m.key)).toEqual([ascii, emoji, null]);
     expect(await store.recordInbox(undefined, emoji, emoji, 1)).toBe(true);
     expect(await store.hasInbox(emoji, emoji)).toBe(true);
+  });
+
+  it("refuses a message id longer than its column in OutboxInbox.process() before the handler runs, which would otherwise run at every redelivery", async () => {
+    const storage = new OutboxStorage();
+    Object.assign(storage, { logger: silentLogger });
+    storage.registerSource({ messages: store, inbox: store });
+    const inbox = new OutboxInbox(storage);
+    let runs = 0;
+    const handle = () => ++runs;
+
+    // hasInbox() refuses it, before process() runs the handler: recordInbox() would refuse it after.
+    for (let delivery = 1; delivery <= 2; delivery++) {
+      await expect(inbox.process('webhooks:payments', 'm'.repeat(256), handle)).rejects.toThrow(
+        'MySqlOutboxStore.hasInbox(): a message id is at most 255 characters on MySQL',
+      );
+    }
+    expect(runs).toBe(0);
+
+    // 255 characters are processed once, then found.
+    expect(await inbox.process('webhooks:payments', 'm'.repeat(255), handle)).toEqual({ duplicate: false, result: 1 });
+    expect(await inbox.process('webhooks:payments', 'm'.repeat(255), handle)).toEqual({ duplicate: true });
   });
 
   it('keeps keys, ids, topics and consumers that differ only in case, accents or a trailing space apart', async () => {

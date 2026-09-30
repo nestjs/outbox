@@ -534,7 +534,14 @@ FROM ${this.t.deadLetters} d WHERE ${i.in('d.id', chunk)} ORDER BY d.seq`,
     }
   }
 
+  /**
+   * Whether `consumer` recorded `messageId`. A consumer name or message id longer than its column fails with
+   * `recordInbox()`'s `RangeError`, before any statement: no record of it could exist, and `OutboxInbox.process()` would
+   * otherwise run the handler, then fail to record it, at every redelivery.
+   */
   async hasInbox(consumer: string, messageId: string): Promise<boolean> {
+    checkLength(consumer, 'a consumer name', 'hasInbox');
+    checkLength(messageId, 'a message id', 'hasInbox');
     await this.readiness.ready();
     const p = new SqlParams();
     const rows = await this.executor.query<Row>(
