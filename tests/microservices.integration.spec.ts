@@ -204,6 +204,8 @@ for (const recipe of recipes(postgres, reason, 'outbox_tcp')) {
       // Handled, not only arrived: the last delivery's transaction may still be committing.
       await until(() => consumer.handled === 3);
       await settled();
+      // The relay emits `published` once markPublished() returns, a moment after the row is gone.
+      await until(() => events.length === 3);
 
       expect(consumer.arrived.map((envelope) => envelope.id)).toEqual(messages.map((message) => message.id));
       expect(consumer.arrived[0]).toEqual({
@@ -239,6 +241,7 @@ for (const recipe of recipes(postgres, reason, 'outbox_tcp')) {
       const [audited, placed] = await orders().place(3, ['internal.order.audited', 'order.placed']);
       await until(() => consumer.arrived.length === 1 && local.length === 1);
       await settled();
+      await until(() => events.length === 2);
 
       expect(local).toEqual([audited!.id]);
       expect(consumer.arrived.map((envelope) => envelope.id)).toEqual([placed!.id]);
@@ -260,6 +263,7 @@ for (const recipe of recipes(postgres, reason, 'outbox_tcp')) {
       clock.advance(3_000); // the lease expires: the relay emits it again
       await until(() => consumer.duplicates === 1);
       await settled();
+      await until(() => events.some((event) => event.type === 'published'));
       clock.restore();
 
       expect(consumer.arrived.map((envelope) => envelope.id)).toEqual([message!.id, message!.id]);

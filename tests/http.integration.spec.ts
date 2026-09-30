@@ -265,6 +265,8 @@ for (const recipe of recipes(postgres, reason, 'outbox_http')) {
         await settled();
 
         const [billing] = callsOf('billing');
+        // The relay emits `published` once markPublished() returns, a moment after the row is gone.
+        await until(() => eventsOf(billing!.id).length === 1);
         expect(billing).toMatchObject({ attempt: 1 });
         expect(await database.count('it_orders')).toBe(1);
         expect(await database.count('it_invoices', 'invoicing')).toBe(1);
@@ -322,6 +324,7 @@ for (const recipe of recipes(postgres, reason, 'outbox_http')) {
         expect(await database.count('it_invoices', 'invoicing')).toBe(1);
 
         const id = callsOf('invoicing')[0]!.id;
+        await until(() => eventsOf(id).length === 2);
         expect(eventsOf(id).map((event) => event.type)).toEqual(['retry-scheduled', 'published']);
         expect(eventsOf(id)[0]).toMatchObject({ attempt: 1, delayMs: 20, transport: 'local' });
         expect(channels.of(id)).toEqual(['nestjs:outbox:retry-scheduled', 'nestjs:outbox:published']);

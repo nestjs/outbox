@@ -193,6 +193,8 @@ for (const recipe of recipes(postgres, reason, 'outbox_instances')) {
 
       await until(async () => (await database.count('it_invoices', 'ledger')) === added.length, 20_000);
       await until(async () => (await api.relay.stats()).pending === 0, 10_000);
+      // A relay emits `published` once markPublished() returns, a moment after the row is gone.
+      await until(() => publishedBy(a).length + publishedBy(b).length === added.length);
 
       const published = [...publishedBy(a), ...publishedBy(b)];
       expect(published.toSorted()).toEqual(added.map((message) => message.id).toSorted());
@@ -269,6 +271,7 @@ for (const recipe of recipes(postgres, reason, 'outbox_instances')) {
       clock.advance(3_000);
       await until(() => deliveriesOf('ledger').length === 3);
       await until(async () => (await survivor.relay.stats()).pending === 0);
+      await until(() => publishedBy(survivor).length === 3);
 
       expect(deliveriesOf('ledger').map((delivery) => [delivery.instance, delivery.step])).toEqual([
         ['survivor', 0],
