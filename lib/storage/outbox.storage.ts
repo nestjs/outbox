@@ -258,8 +258,9 @@ function productionError(missing: OutboxStorageContract[]): string {
   return (
     `OutboxStorage: no store is registered for ${and(missing.map((contract, i) => `\`${contract}\` (${specs[i]!.interfaceName})`))}, ` +
     `and NODE_ENV is "production": in memory, ${and(specs.map((spec) => spec.holds))} would be lost on restart and not ` +
-    `shared between instances. Implement ${and(specs.map((spec) => spec.interfaceName))} in a provider that injects ` +
-    `OutboxStorage and calls \`storage.registerSource({ ${example} })\` in its constructor, or set ` +
+    'shared between instances. Register a store on your database: PostgresOutboxStore (@nestjs/outbox/postgres), ' +
+    `MySqlOutboxStore (@nestjs/outbox/mysql), or your own ${and(specs.map((spec) => spec.interfaceName))} in a provider ` +
+    `that injects OutboxStorage and calls \`storage.registerSource({ ${example} })\` in its constructor. Or set ` +
     '`allowInMemoryStorage: true` in the OutboxModule options to run in memory anyway.'
   );
 }

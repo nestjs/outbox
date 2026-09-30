@@ -333,13 +333,15 @@ describe('OutboxStorage', () => {
   describe('production guard', () => {
     beforeEach(() => (process.env.NODE_ENV = 'production'));
 
-    it('fails at startup with no source, naming the interfaces and how to register them', async () => {
+    it('fails at startup with no source, naming the first-party stores, the interfaces and how to register them', async () => {
       await expect(start([], { relay: { enabled: true } })).rejects.toThrow(
         'OutboxStorage: no store is registered for `messages` (OutboxStore) and `inbox` (OutboxInboxStore), and ' +
           'NODE_ENV is "production": in memory, messages and inbox records would be lost on restart ' +
-          'and not shared between instances. Implement OutboxStore and OutboxInboxStore in a provider that injects ' +
-          'OutboxStorage and calls `storage.registerSource({ messages: this, inbox: this })` in its constructor, or ' +
-          'set `allowInMemoryStorage: true` in the OutboxModule options to run in memory anyway.',
+          'and not shared between instances. Register a store on your database: PostgresOutboxStore ' +
+          '(@nestjs/outbox/postgres), MySqlOutboxStore (@nestjs/outbox/mysql), or your own OutboxStore and ' +
+          'OutboxInboxStore in a provider that injects OutboxStorage and calls ' +
+          '`storage.registerSource({ messages: this, inbox: this })` in its constructor. Or set ' +
+          '`allowInMemoryStorage: true` in the OutboxModule options to run in memory anyway.',
       );
 
       const registered = await start([AppOutboxStore], { relay: { enabled: true, pollInterval: '1h' } });
@@ -365,8 +367,9 @@ describe('OutboxStorage', () => {
     it('requires the inbox where a handler keeps it, or where the app only consumes', async () => {
       await expect(start([MessagesStore, EmailHandler])).rejects.toThrow(
         'OutboxStorage: no store is registered for `inbox` (OutboxInboxStore), and NODE_ENV is "production": in ' +
-          'memory, inbox records would be lost on restart and not shared between instances. Implement ' +
-          'OutboxInboxStore in a provider that injects OutboxStorage and calls `storage.registerSource({ inbox: this })`',
+          'memory, inbox records would be lost on restart and not shared between instances. Register a store on your ' +
+          'database: PostgresOutboxStore (@nestjs/outbox/postgres), MySqlOutboxStore (@nestjs/outbox/mysql), or your ' +
+          'own OutboxInboxStore in a provider that injects OutboxStorage and calls `storage.registerSource({ inbox: this })`',
       );
 
       // Consumer-only (the relay off, nowhere to publish): the inbox, and only the inbox.
