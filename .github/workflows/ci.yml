@@ -54,10 +54,48 @@ jobs:
         # The strict install above already checked the tree. Swapping only some @nestjs packages
         # to 11 conflicts with the optional peers the rest of the 12.x tree declares.
         run: npm install --no-save --legacy-peer-deps @nestjs/common@${{ matrix.nestjs-version }} @nestjs/core@${{ matrix.nestjs-version }} @nestjs/testing@${{ matrix.nestjs-version }} @nestjs/platform-express@${{ matrix.nestjs-version }} @nestjs/platform-fastify@${{ matrix.nestjs-version }} @nestjs/microservices@${{ matrix.nestjs-version }}
-      - name: Generate the Prisma client
-        # The Prisma store recipe in tests/fixtures imports it; the tests' global setup does the same.
+      - name: Generate the Prisma clients
+        # PostgreSQL's (the Prisma store recipe in tests/fixtures, fromPrisma() in tests/postgres) and MySQL's
+        # (tests/mysql): the typecheck reads both. The tests' global setups do the same.
         run: npm run generate:prisma
       - name: Typecheck
         run: npx tsc -p tsconfig.json --noEmit
       - name: e2e tests
+        # Without SQL_TEST_MYSQL_URL the MySQL project's tests skip, with the reason: e2e-mysql runs them.
         run: npm run test:e2e
+
+  e2e-mysql:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # MySQL 8.4 LTS and the current innovation release: the versions MySqlOutboxStore supports.
+        mysql: ['8.4', '9.7.0']
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql }}
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SQL_TEST_MYSQL_URL: mysql://root:root@127.0.0.1:3306
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm install
+      - name: Generate the Prisma clients
+        run: npm run generate:prisma
+      - name: e2e tests on MySQL
+        # MySqlOutboxStore's contracts through every executor, migrations, races and the command line, and the
+        # integration suites on its recipes.
+        run: npx vitest run --project outbox:mysql-store
