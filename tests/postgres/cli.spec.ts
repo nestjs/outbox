@@ -40,7 +40,7 @@ describe('nest-outbox', () => {
     const help = await run(['--help']);
     expect(help).toMatchObject({ code: 0, err: '' });
     expect(help.out).toMatch(/^Usage: nest-outbox <command> \[options\]/);
-    expect(help.out).toContain("PostgresOutboxStore's schema (@nestjs/outbox/postgres):\nMySqlOutboxStore's schema (@nestjs/outbox/mysql):");
+    expect(help.out).toContain("\n\nPostgresOutboxStore's schema (@nestjs/outbox/postgres) or MySqlOutboxStore's (@nestjs/outbox/mysql):\n\n  migrate   ");
     expect(help.out).toContain('Default: nest_outbox');
     expect(await run([])).toEqual({ code: 1, out: '', err: help.out });
     expect(await run(['upgrade'])).toEqual({ code: 1, out: '', err: `Unknown command "upgrade".\n\n${help.out}` });

@@ -31,7 +31,7 @@ describe('nest-outbox, for MySQL', () => {
 
   it('names both stores and both URL schemes in its usage', async () => {
     const help = await run(['--help']);
-    expect(help.out).toContain("PostgresOutboxStore's schema (@nestjs/outbox/postgres):\nMySqlOutboxStore's schema (@nestjs/outbox/mysql):");
+    expect(help.out).toContain("\n\nPostgresOutboxStore's schema (@nestjs/outbox/postgres) or MySqlOutboxStore's (@nestjs/outbox/mysql):\n\n  migrate   ");
     expect(help.out).toContain('--url <url>        The database (postgres://... or mysql://...). Default: $DATABASE_URL');
     expect(help.out).toContain('--dialect <name>   sql: the database it\'s for (postgres, mysql). Default: postgres');
   });
