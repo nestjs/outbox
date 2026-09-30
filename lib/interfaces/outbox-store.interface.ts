@@ -14,7 +14,8 @@ import type { Awaitable } from './awaitable.interface.js';
  * already uses (a Drizzle database, a TypeORM data source, Prisma, a driver) and registers
  * that provider in its constructor, usually together with the inbox:
  * `OutboxStorage.registerSource({ messages: this, inbox: this })`. Without one, the module
- * uses `InMemoryOutboxStore`.
+ * uses `InMemoryOutboxStore`. On PostgreSQL, `PostgresOutboxStore` from
+ * `@nestjs/outbox/postgres` implements both contracts through the client you already use.
  *
  * `Tx` is your data layer's transaction handle, passed through untouched: Drizzle's `tx`, a
  * TypeORM `EntityManager`, a Prisma transaction client, a `pg` `PoolClient`. The package

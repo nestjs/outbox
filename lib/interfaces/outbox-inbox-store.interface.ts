@@ -6,7 +6,8 @@ import type { Awaitable } from './awaitable.interface.js';
  * `@EventPattern()` receiving `ClientProxyTransport` envelopes) implements this contract
  * alone and registers it with `OutboxStorage.registerSource({ inbox: this })`; a service
  * that also produces usually implements both in one class. Its method names don't clash with
- * `OutboxStore`'s, so one class can implement both.
+ * `OutboxStore`'s, so one class can implement both, as `PostgresOutboxStore` from
+ * `@nestjs/outbox/postgres` does.
  *
  * `@nestjs/outbox/testing` exports `outboxInboxStoreContract()`, its test suite.
  */

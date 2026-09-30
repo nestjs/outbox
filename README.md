@@ -35,6 +35,29 @@ $ npm i --save @nestjs/outbox
 
 [Overview & Tutorial](https://docs.nestjs.com/reliability/outbox)
 
+## PostgreSQL store
+
+`@nestjs/outbox/postgres` ships `PostgresOutboxStore`, which keeps the messages, the dead letters and the consumers' inbox in a schema of its own (`nest_outbox`) and writes through the client your application already uses: `fromPg(pool)`, `fromDrizzle(db)`, `fromTypeOrm(dataSource)`, `fromPrisma(prisma)` or `fromKysely(db)`. Register it with a factory provider:
+
+```ts
+import { OutboxStorage } from '@nestjs/outbox';
+import { fromDrizzle, PostgresOutboxStore } from '@nestjs/outbox/postgres';
+
+@Module({
+  imports: [DrizzleModule.forRoot({ drizzle, connection: process.env.DATABASE_URL! }), OutboxModule.forRoot()],
+  providers: [
+    {
+      provide: PostgresOutboxStore,
+      inject: [getDrizzleToken(), OutboxStorage],
+      useFactory: (db: Database, storage: OutboxStorage) => new PostgresOutboxStore({ executor: fromDrizzle(db) }, storage),
+    },
+  ],
+})
+export class AppModule {}
+```
+
+`outbox.add(tx, message)` then takes your ORM's own transaction object (Drizzle's `tx`, a TypeORM `EntityManager`, a Prisma transaction client, a Kysely `Transaction`, a `pg` client after `BEGIN`). The store applies its migrations at startup, except when `NODE_ENV` is `production`; there, apply them on deploy with `npx nest-outbox migrate --url <database url>` (`status` checks, `sql` prints them for your own migration tool).
+
 ## Support
 
 Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).

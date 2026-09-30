@@ -63,8 +63,8 @@ export type {
   OutboxStore,
   OutboxStoreStats,
 } from './interfaces/index.js';
-// The default and test double. Production stores live on the app's database: the docs'
-// Drizzle, TypeORM and Prisma recipes.
+// The default and test double. Production stores live on the app's database:
+// PostgresOutboxStore (@nestjs/outbox/postgres), or one of your own.
 export * from './stores/index.js';
 
 // Extension points: a transport for your broker, and the built-in ClientProxy one
