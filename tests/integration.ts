@@ -7,17 +7,21 @@
  * - `TypeOrmOutboxStore` through `@nestjs/typeorm` on PostgreSQL;
  * - `PrismaOutboxStore` on PostgreSQL (needs the client `npm run generate:prisma` writes into
  *   tests/fixtures/prisma/generated, which the vitest global setup runs; skipped, with the
- *   reason, without it).
+ *   reason, without it);
+ * - the first-party `PostgresOutboxStore` (`@nestjs/outbox/postgres`), registered as the docs
+ *   show it, by a factory provider that injects the database and `OutboxStorage`: through
+ *   `fromDrizzle()` on PGlite and on PostgreSQL, `fromTypeOrm()` and `fromPrisma()`.
  *
  * On PostgreSQL (`SQL_TEST_PG_URL`, else a throwaway cluster from local binaries, else skipped
  * with the reason) every application instance opens a pool of its own, so instances race over
- * real connections. Each database is migrated with the recipe's own migrations and gets two
- * business tables of the application's, `it_orders` and `it_invoices`, written in the same
- * transactions as the outbox and the inbox.
+ * real connections. Each database is migrated with the recipe's own migrations (the first-party
+ * store's, as `npx nest-outbox migrate` applies them on deploy) and gets two business tables of
+ * the application's, `it_orders` and `it_invoices`, written in the same transactions as the
+ * outbox and the inbox.
  */
 import { PGlite } from '@electric-sql/pglite';
-import { Global, Inject, Injectable, Module, type DynamicModule, type Type } from '@nestjs/common';
-import { DrizzleModule, InjectDrizzle } from '@nestjs/drizzle';
+import { Global, Inject, Injectable, Module, type DynamicModule, type InjectionToken, type Provider, type Type } from '@nestjs/common';
+import { DrizzleModule, getDrizzleToken, InjectDrizzle } from '@nestjs/drizzle';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -35,8 +39,9 @@ import type { Database, Transaction } from './fixtures/database/drizzle.js';
 import * as schema from './fixtures/database/schema.js';
 import { dataSourceOptions } from './fixtures/typeorm/data-source.js';
 import { TypeOrmOutboxStore } from './fixtures/typeorm/typeorm-outbox.store.js';
-import type { TestPostgres } from './support/postgres.js';
-import type { OutboxInboxStore, OutboxStore } from '../lib/index.js';
+import { endPool, type TestPostgres } from './support/postgres.js';
+import { OutboxStorage, type OutboxInboxStore, type OutboxStore } from '../lib/index.js';
+import { fromDrizzle, fromPg, fromPrisma, fromTypeOrm, PostgresOutboxStore, type SqlExecutor } from '../lib/postgres/index.js';
 
 const fixture = (path: string) => fileURLToPath(new URL(`./fixtures/${path}`, import.meta.url));
 
@@ -69,14 +74,14 @@ export interface Recipe {
   readonly name: string;
   /** Why the recipe can't run here, or undefined. */
   readonly skip: string | undefined;
-  /** Whether the store can tell the root handle from a transaction (Prisma's can't). */
+  /** Whether the store can tell the root handle from a transaction (the Prisma recipe's can't). */
   readonly refusesRoot: boolean;
   /** The order API's database: the recipe's outbox and inbox tables. */
   open(name: string): Promise<RecipeDatabase>;
   /**
    * A consumer-only service's database. The Drizzle recipes use the analytics service's
    * `DrizzleInboxStore` (tests/fixtures/analytics), registered as `{ inbox: this }`; the others
-   * the full store.
+   * the full store, `PostgresOutboxStore` included (its tables for messages stay empty).
    */
   openConsumer(name: string): Promise<RecipeDatabase>;
 }
@@ -103,13 +108,15 @@ function withQueries(
   query: RecipeDatabase['query'],
   tables: string[],
   rest: Pick<RecipeDatabase, 'module' | 'storeClass' | 'close'>,
+  inboxTable = 'outbox_inbox',
 ): RecipeDatabase {
   return {
     ...rest,
     query,
     async count(table, consumer) {
+      const from = table === 'outbox_inbox' ? inboxTable : table;
       const where = consumer === undefined ? '' : ' WHERE consumer = $1';
-      const rows = await query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}${where}`, consumer === undefined ? [] : [consumer]);
+      const rows = await query<{ n: number }>(`SELECT count(*)::int AS n FROM ${from}${where}`, consumer === undefined ? [] : [consumer]);
       return rows[0]!.n;
     },
     async reset() {
@@ -256,21 +263,8 @@ async function loadPrisma(): Promise<{ PrismaService: Type<any>; PrismaOutboxSto
   return { PrismaService, PrismaOutboxStore };
 }
 
-async function prismaDatabase(postgres: TestPostgres, name: string): Promise<RecipeDatabase> {
-  const url = await postgres.createDatabase(name);
-  const pool = new pg.Pool({ connectionString: url, max: 4 });
-
-  // What `prisma migrate deploy` applies, in order.
-  const migrations = fixture('prisma/migrations');
-  for (const dir of readdirSync(migrations).filter((entry) => !entry.endsWith('.toml')).sort()) {
-    await pool.query(readFileSync(`${migrations}/${dir}/migration.sql`, 'utf8'));
-  }
-  for (const statement of BUSINESS_TABLES) {
-    await pool.query(statement);
-  }
-
-  const { PrismaService, PrismaOutboxStore } = await loadPrisma();
-
+/** The application's data access through Prisma, and the `PrismaService` it injects, on `url`. */
+function prismaApplication(PrismaService: Type<any>, url: string): { database: Type<AppDatabase>; service: Provider } {
   @Injectable()
   class PrismaAppDatabase extends AppDatabase {
     constructor(@Inject(PrismaService) private readonly prismaService: any) {
@@ -294,37 +288,162 @@ async function prismaDatabase(postgres: TestPostgres, name: string): Promise<Rec
     }
   }
 
+  return {
+    database: PrismaAppDatabase,
+    service: {
+      // PrismaService reads DATABASE_URL when constructed; it disconnects in onApplicationShutdown.
+      provide: PrismaService,
+      useFactory: () => {
+        const previous = process.env.DATABASE_URL;
+        process.env.DATABASE_URL = url;
+        try {
+          return new PrismaService();
+        } finally {
+          if (previous === undefined) {
+            delete process.env.DATABASE_URL;
+          } else {
+            process.env.DATABASE_URL = previous;
+          }
+        }
+      },
+    },
+  };
+}
+
+async function prismaDatabase(postgres: TestPostgres, name: string): Promise<RecipeDatabase> {
+  const url = await postgres.createDatabase(name);
+  const pool = new pg.Pool({ connectionString: url, max: 4 });
+
+  // What `prisma migrate deploy` applies, in order.
+  const migrations = fixture('prisma/migrations');
+  for (const dir of readdirSync(migrations).filter((entry) => !entry.endsWith('.toml')).sort()) {
+    await pool.query(readFileSync(`${migrations}/${dir}/migration.sql`, 'utf8'));
+  }
+  for (const statement of BUSINESS_TABLES) {
+    await pool.query(statement);
+  }
+
+  const { PrismaService, PrismaOutboxStore } = await loadPrisma();
+  const application = prismaApplication(PrismaService, url);
   const query: RecipeDatabase['query'] = async (text, params) => (await pool.query(text, params)).rows;
 
   return withQueries(query, OUTBOX_TABLES, {
     storeClass: PrismaOutboxStore,
-    module: () =>
-      globalModule(
-        [],
-        [
-          {
-            // PrismaService reads DATABASE_URL when constructed; it disconnects in onApplicationShutdown.
-            provide: PrismaService,
-            useFactory: () => {
-              const previous = process.env.DATABASE_URL;
-              process.env.DATABASE_URL = url;
-              try {
-                return new PrismaService();
-              } finally {
-                if (previous === undefined) {
-                  delete process.env.DATABASE_URL;
-                } else {
-                  process.env.DATABASE_URL = previous;
-                }
-              }
-            },
-          },
-          PrismaOutboxStore,
-        ],
-        PrismaAppDatabase,
-      ),
+    module: () => globalModule([], [application.service, PrismaOutboxStore], application.database),
     close: () => pool.end(),
   });
+}
+
+// ------------------------------------------------------------------ PostgresOutboxStore
+
+/** The first-party store's tables, in its schema (`nest_outbox`), and the application's. */
+const FIRST_PARTY_TABLES = ['nest_outbox.messages', 'nest_outbox.dead_letters', 'nest_outbox.inbox', 'it_orders', 'it_invoices'];
+
+/**
+ * `PostgresOutboxStore` as an application registers it: a factory provider that injects the database (`token`) and
+ * the registry, with which the store registers itself for both contracts.
+ */
+function postgresOutboxStore(token: InjectionToken, executor: (db: any) => SqlExecutor): Provider {
+  return {
+    provide: PostgresOutboxStore,
+    inject: [token, OutboxStorage],
+    useFactory: (db: unknown, storage: OutboxStorage) => new PostgresOutboxStore({ executor: executor(db) }, storage),
+  };
+}
+
+/** Applies the store's migrations, as `npx nest-outbox migrate` does on deploy, and adds the application's tables. */
+async function prepareFirstParty(executor: SqlExecutor): Promise<void> {
+  await new PostgresOutboxStore({ executor }).migrate();
+  for (const statement of BUSINESS_TABLES) {
+    await executor.query(statement);
+  }
+}
+
+async function firstPartyPgliteDatabase(): Promise<RecipeDatabase> {
+  const client = new PGlite();
+  const db = drizzlePglite(client);
+  await prepareFirstParty(fromDrizzle(db));
+  const query: RecipeDatabase['query'] = async (text, params) => (await client.query(text, params)).rows as never;
+
+  return withQueries(
+    query,
+    FIRST_PARTY_TABLES,
+    {
+      storeClass: PostgresOutboxStore,
+      // Every instance shares the one connection PGlite has; the test closes it, not the apps.
+      module: () =>
+        globalModule([DrizzleModule.forRoot({ db, autoCloseConnection: false })], [postgresOutboxStore(getDrizzleToken(), fromDrizzle)], DrizzleAppDatabase),
+      close: () => client.close(),
+    },
+    'nest_outbox.inbox',
+  );
+}
+
+async function firstPartyDrizzleDatabase(postgres: TestPostgres, name: string): Promise<RecipeDatabase> {
+  const url = await postgres.createDatabase(name);
+  const pool = new pg.Pool({ connectionString: url, max: 4 });
+  await prepareFirstParty(fromPg(pool));
+  const query: RecipeDatabase['query'] = async (text, params) => (await pool.query(text, params)).rows;
+
+  return withQueries(
+    query,
+    FIRST_PARTY_TABLES,
+    {
+      storeClass: PostgresOutboxStore,
+      // DrizzleModule opens the instance's pool and ends it in onApplicationShutdown.
+      module: () =>
+        globalModule(
+          [DrizzleModule.forRoot({ drizzle, connection: { connectionString: url, max: 5 } })],
+          [postgresOutboxStore(getDrizzleToken(), fromDrizzle)],
+          DrizzleAppDatabase,
+        ),
+      close: () => endPool(pool),
+    },
+    'nest_outbox.inbox',
+  );
+}
+
+async function firstPartyTypeOrmDatabase(postgres: TestPostgres, name: string): Promise<RecipeDatabase> {
+  const url = await postgres.createDatabase(name);
+  const pool = new pg.Pool({ connectionString: url, max: 4 });
+  await prepareFirstParty(fromPg(pool));
+  const query: RecipeDatabase['query'] = async (text, params) => (await pool.query(text, params)).rows;
+
+  return withQueries(
+    query,
+    FIRST_PARTY_TABLES,
+    {
+      storeClass: PostgresOutboxStore,
+      module: () =>
+        globalModule(
+          [TypeOrmModule.forRoot({ type: 'postgres', url, poolSize: 5, retryAttempts: 0 })],
+          [postgresOutboxStore(DataSource, fromTypeOrm)],
+          TypeOrmAppDatabase,
+        ),
+      close: () => endPool(pool),
+    },
+    'nest_outbox.inbox',
+  );
+}
+
+async function firstPartyPrismaDatabase(postgres: TestPostgres, name: string): Promise<RecipeDatabase> {
+  const url = await postgres.createDatabase(name);
+  const pool = new pg.Pool({ connectionString: url, max: 4 });
+  await prepareFirstParty(fromPg(pool));
+  const { PrismaService } = await loadPrisma();
+  const application = prismaApplication(PrismaService, url);
+  const query: RecipeDatabase['query'] = async (text, params) => (await pool.query(text, params)).rows;
+
+  return withQueries(
+    query,
+    FIRST_PARTY_TABLES,
+    {
+      storeClass: PostgresOutboxStore,
+      module: () => globalModule([], [application.service, postgresOutboxStore(PrismaService, fromPrisma)], application.database),
+      close: () => endPool(pool),
+    },
+    'nest_outbox.inbox',
+  );
 }
 
 // ------------------------------------------------------------------ the list
@@ -365,6 +484,34 @@ export function recipes(postgres: TestPostgres | null, reason: string | undefine
       refusesRoot: false,
       open: (name) => prismaDatabase(server(), `${prefix}_prisma_${name}`),
       openConsumer: (name) => prismaDatabase(server(), `${prefix}_prisma_${name}`),
+    },
+    {
+      name: 'PostgresOutboxStore (fromDrizzle) on PGlite',
+      skip: undefined,
+      refusesRoot: true,
+      open: () => firstPartyPgliteDatabase(),
+      openConsumer: () => firstPartyPgliteDatabase(),
+    },
+    {
+      name: 'PostgresOutboxStore (fromDrizzle) on PostgreSQL',
+      skip: noServer,
+      refusesRoot: true,
+      open: (name) => firstPartyDrizzleDatabase(server(), `${prefix}_pgdrizzle_${name}`),
+      openConsumer: (name) => firstPartyDrizzleDatabase(server(), `${prefix}_pgdrizzle_${name}`),
+    },
+    {
+      name: 'PostgresOutboxStore (fromTypeOrm) on PostgreSQL',
+      skip: noServer,
+      refusesRoot: true,
+      open: (name) => firstPartyTypeOrmDatabase(server(), `${prefix}_pgtypeorm_${name}`),
+      openConsumer: (name) => firstPartyTypeOrmDatabase(server(), `${prefix}_pgtypeorm_${name}`),
+    },
+    {
+      name: 'PostgresOutboxStore (fromPrisma) on PostgreSQL',
+      skip: noServer ?? prismaSkip,
+      refusesRoot: true,
+      open: (name) => firstPartyPrismaDatabase(server(), `${prefix}_pgprisma_${name}`),
+      openConsumer: (name) => firstPartyPrismaDatabase(server(), `${prefix}_pgprisma_${name}`),
     },
   ];
 }
