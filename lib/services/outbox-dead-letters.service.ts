@@ -34,8 +34,8 @@ export class OutboxDeadLetters {
 
   /**
    * Moves dead letters back to the outbox with a fresh retry budget and the same id
-   * (so consumer inboxes still recognize them). An old id sorts first, so a requeued
-   * message goes ahead of pending messages with the same key.
+   * (so consumer inboxes still recognize them). A dead letter keeps its place in its key
+   * (the store's `seq`), so a requeued message goes ahead of the key's later messages.
    */
   async requeue(target: OutboxDeadLetterTarget): Promise<number> {
     const count = await this.store.requeueDeadLetters(toFilter(target), Date.now());
