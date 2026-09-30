@@ -69,6 +69,7 @@
     "@types/supertest": "6.0.3",
     "drizzle-orm": "0.45.3",
     "husky": "9.1.7",
+    "kysely": "0.29.6",
     "lint-staged": "17.5.1",
     "oxlint": "1.85.0",
     "pg": "8.23.0",
