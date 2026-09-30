@@ -10,7 +10,6 @@ import { ClientsModule, EventPattern, Payload, Transport } from '@nestjs/microse
 import { Test, type TestingModule } from '@nestjs/testing';
 import type { AddressInfo, Server } from 'node:net';
 import { of } from 'rxjs';
-import { startPostgres } from './support/postgres.js';
 import {
   ClientProxyTransport,
   OnOutboxMessage,
@@ -26,10 +25,11 @@ import {
 } from '../lib/index.js';
 import { inMemoryDatabase } from './databases.js';
 import { registeredStore, until } from './helpers.js';
-import { AppDatabase, controllableClock, diagnostics, recipes, titleOf, type RecipeDatabase } from './integration.js';
+import { AppDatabase, controllableClock, diagnostics, integrationRecipes, titleOf, type RecipeDatabase } from './integration.js';
 
-const { postgres, reason } = await startPostgres();
-afterAll(() => postgres?.stop());
+// PostgreSQL's and PGlite's recipes, or MySQL's, as the project says (vitest.config.ts).
+const { recipes, stop } = await integrationRecipes('outbox_tcp');
+afterAll(stop);
 
 interface OrderEvent {
   orderId: number;
@@ -124,7 +124,7 @@ class OrdersService {
   }
 }
 
-for (const recipe of recipes(postgres, reason, 'outbox_tcp')) {
+for (const recipe of recipes) {
   describe.skipIf(recipe.skip)(`ClientProxyTransport over TCP to a consumer service: ${titleOf(recipe)}`, () => {
     let producerDatabase: RecipeDatabase;
     let consumerDatabase: RecipeDatabase;

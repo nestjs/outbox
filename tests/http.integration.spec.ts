@@ -28,7 +28,6 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { Observable } from 'rxjs';
 import request from 'supertest';
 import { adapters, createApp } from './support/adapters.js';
-import { startPostgres } from './support/postgres.js';
 import {
   NonRetryableMessageError,
   OnOutboxMessage,
@@ -42,10 +41,11 @@ import {
   type OutboxHandlerContext,
 } from '../lib/index.js';
 import { until } from './helpers.js';
-import { AppDatabase, diagnostics, recipes, titleOf, type RecipeDatabase } from './integration.js';
+import { AppDatabase, diagnostics, integrationRecipes, titleOf, type RecipeDatabase } from './integration.js';
 
-const { postgres, reason } = await startPostgres();
-afterAll(() => postgres?.stop());
+// PostgreSQL's and PGlite's recipes, or MySQL's, as the project says (vitest.config.ts).
+const { recipes, stop } = await integrationRecipes('outbox_http');
+afterAll(stop);
 
 interface OrderPlaced {
   orderId: number;
@@ -200,7 +200,7 @@ class OutboxAdminController {
   }
 }
 
-for (const recipe of recipes(postgres, reason, 'outbox_http')) {
+for (const recipe of recipes) {
   describe.skipIf(recipe.skip)(`Outbox over HTTP: ${titleOf(recipe)}`, () => {
     let database: RecipeDatabase;
 

@@ -7,7 +7,6 @@
  */
 import { Inject, Injectable, Module } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
-import { startPostgres } from './support/postgres.js';
 import {
   OnOutboxMessage,
   Outbox,
@@ -22,10 +21,11 @@ import {
   type OutboxStore,
 } from '../lib/index.js';
 import { deferred, sleep, until } from './helpers.js';
-import { AppDatabase, controllableClock, diagnostics, recipes, titleOf, type RecipeDatabase } from './integration.js';
+import { AppDatabase, controllableClock, diagnostics, integrationRecipes, titleOf, type RecipeDatabase } from './integration.js';
 
-const { postgres, reason } = await startPostgres();
-afterAll(() => postgres?.stop());
+// PostgreSQL's and PGlite's recipes, or MySQL's, as the project says (vitest.config.ts).
+const { recipes, stop } = await integrationRecipes('outbox_instances');
+afterAll(stop);
 
 const INSTANCE = Symbol('INSTANCE');
 
@@ -110,7 +110,7 @@ interface Instance {
   close(): Promise<void>;
 }
 
-for (const recipe of recipes(postgres, reason, 'outbox_instances')) {
+for (const recipe of recipes) {
   describe.skipIf(recipe.skip)(`Several application instances on one database: ${titleOf(recipe)}`, () => {
     let database: RecipeDatabase;
     let channels: Awaited<ReturnType<typeof diagnostics>>;

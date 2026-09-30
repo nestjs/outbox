@@ -32,6 +32,8 @@ export default defineConfig({
           include: ['tests/**/*.spec.ts'],
           exclude: [...configDefaults.exclude, 'tests/postgres/**', 'tests/mysql/**'],
           globalSetup: postgresSetup,
+          // The integration suites run their recipes on PostgreSQL (and PGlite) here, on MySQL in outbox:mysql-store.
+          provide: { sqlDialect: 'postgres' },
         },
       },
       {
@@ -48,17 +50,19 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'outbox:mysql-store',
-          include: ['tests/mysql/**/*.spec.ts'],
+          // The integration suites too, on the MySQL recipes (tests/integration.ts: `sqlDialect`).
+          include: ['tests/mysql/**/*.spec.ts', 'tests/*.integration.spec.ts'],
           testTimeout: 30_000,
           hookTimeout: 30_000,
           // MySQL comes from SQL_TEST_MYSQL_URL (its stale `obx_` databases swept before and after the run), else the
           // tests are skipped with the reason. Its own Prisma client (tests/fixtures/prisma-mysql), so no two projects'
           // setups write the same files. The server may be shared: four files at a time, after the other projects,
-          // with pools of at most 3 connections, keep this run's connections near 20, well under max_connections (151 by
-          // default).
+          // with pools of at most 3 connections (2 per application instance), keep this run's connections near 20, well
+          // under max_connections (151 by default).
           globalSetup: ['tests/support/generate-prisma-mysql-client.ts', 'tests/support/mysql-global-setup.ts'],
           maxWorkers: 4,
           sequence: { groupOrder: 1 },
+          provide: { sqlDialect: 'mysql' },
         },
       },
     ],

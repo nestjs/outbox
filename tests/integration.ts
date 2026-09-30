@@ -10,28 +10,38 @@
  *   reason, without it);
  * - the first-party `PostgresOutboxStore` (`@nestjs/outbox/postgres`), registered as the docs
  *   show it, by a factory provider that injects the database and `OutboxStorage`: through
- *   `fromDrizzle()` on PGlite and on PostgreSQL, `fromTypeOrm()` and `fromPrisma()`.
+ *   `fromDrizzle()` on PGlite and on PostgreSQL, `fromTypeOrm()` and `fromPrisma()`;
+ * - the first-party `MySqlOutboxStore` (`@nestjs/outbox/mysql`), registered the same way, on
+ *   MySQL: through `fromDrizzle()` (`@nestjs/drizzle` with drizzle-orm/mysql2), `fromTypeOrm()`
+ *   and `fromPrisma()` (its MariaDB adapter).
+ *
+ * Each vitest project runs the suites on one family (`integrationRecipes()`: its `sqlDialect`, see
+ * vitest.config.ts): PostgreSQL and PGlite in `outbox`, MySQL in `outbox:mysql-store`.
  *
  * On PostgreSQL (`SQL_TEST_PG_URL`, else a throwaway cluster from local binaries, else skipped
- * with the reason) every application instance opens a pool of its own, so instances race over
- * real connections. Each database is migrated with the recipe's own migrations (the first-party
- * store's, as `npx nest-outbox migrate` applies them on deploy) and gets two business tables of
- * the application's, `it_orders` and `it_invoices`, written in the same transactions as the
- * outbox and the inbox.
+ * with the reason) and MySQL (`SQL_TEST_MYSQL_URL`, else skipped with the reason) every
+ * application instance opens a pool of its own, so instances race over real connections (two
+ * connections each on MySQL, a shared server). Each database is migrated with the recipe's own
+ * migrations (the first-party store's, as `npx nest-outbox migrate` applies them on deploy) and
+ * gets two business tables of the application's, `it_orders` and `it_invoices`, written in the
+ * same transactions as the outbox and the inbox.
  */
 import { PGlite } from '@electric-sql/pglite';
 import { Global, Inject, Injectable, Module, type DynamicModule, type InjectionToken, type Provider, type Type } from '@nestjs/common';
 import { DrizzleModule, getDrizzleToken, InjectDrizzle } from '@nestjs/drizzle';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { sql } from 'drizzle-orm';
+import { drizzle as drizzleMysql } from 'drizzle-orm/mysql2';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
 import { migrate as migratePglite } from 'drizzle-orm/pglite/migrator';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import mysql from 'mysql2/promise';
 import pg from 'pg';
 import { DataSource, type EntityManager } from 'typeorm';
+import { inject } from 'vitest';
 import { DrizzleInboxStore } from './fixtures/analytics/database/drizzle-inbox.store.js';
 import * as analyticsSchema from './fixtures/analytics/database/schema.js';
 import { DrizzleOutboxStore } from './fixtures/database/drizzle-outbox.store.js';
@@ -39,9 +49,18 @@ import type { Database, Transaction } from './fixtures/database/drizzle.js';
 import * as schema from './fixtures/database/schema.js';
 import { dataSourceOptions } from './fixtures/typeorm/data-source.js';
 import { TypeOrmOutboxStore } from './fixtures/typeorm/typeorm-outbox.store.js';
-import { endPool, type TestPostgres } from './support/postgres.js';
+import { startMysql, type TestMysql } from './support/mysql.js';
+import { endPool, startPostgres, type TestPostgres } from './support/postgres.js';
 import { OutboxStorage, type OutboxInboxStore, type OutboxStore } from '../lib/index.js';
+import * as mysqlStore from '../lib/mysql/index.js';
 import { fromDrizzle, fromPg, fromPrisma, fromTypeOrm, PostgresOutboxStore, type SqlExecutor } from '../lib/postgres/index.js';
+
+declare module 'vitest' {
+  export interface ProvidedContext {
+    /** The database family a project runs the integration suites on (vitest.config.ts). */
+    sqlDialect: 'postgres' | 'mysql';
+  }
+}
 
 const fixture = (path: string) => fileURLToPath(new URL(`./fixtures/${path}`, import.meta.url));
 
@@ -263,8 +282,15 @@ async function loadPrisma(): Promise<{ PrismaService: Type<any>; PrismaOutboxSto
   return { PrismaService, PrismaOutboxStore };
 }
 
-/** The application's data access through Prisma, and the `PrismaService` it injects, on `url`. */
-function prismaApplication(PrismaService: Type<any>, url: string): { database: Type<AppDatabase>; service: Provider } {
+/**
+ * The application's data access through Prisma, and the `PrismaService` it injects, on `url`: raw statements with the
+ * dialect's placeholders (`$1` on PostgreSQL, `?` on MySQL).
+ */
+function prismaApplication(
+  PrismaService: Type<any>,
+  url: string,
+  placeholder: (n: number) => string = (n) => `$${n}`,
+): { database: Type<AppDatabase>; service: Provider } {
   @Injectable()
   class PrismaAppDatabase extends AppDatabase {
     constructor(@Inject(PrismaService) private readonly prismaService: any) {
@@ -280,11 +306,11 @@ function prismaApplication(PrismaService: Type<any>, url: string): { database: T
     }
 
     async insertOrder(tx: any, id: number) {
-      await tx.$executeRawUnsafe('INSERT INTO it_orders (id) VALUES ($1)', id);
+      await tx.$executeRawUnsafe(`INSERT INTO it_orders (id) VALUES (${placeholder(1)})`, id);
     }
 
     async insertInvoice(tx: any, orderId: number, consumer: string) {
-      await tx.$executeRawUnsafe('INSERT INTO it_invoices (order_id, consumer) VALUES ($1, $2)', orderId, consumer);
+      await tx.$executeRawUnsafe(`INSERT INTO it_invoices (order_id, consumer) VALUES (${placeholder(1)}, ${placeholder(2)})`, orderId, consumer);
     }
   }
 
@@ -446,6 +472,107 @@ async function firstPartyPrismaDatabase(postgres: TestPostgres, name: string): P
   );
 }
 
+// ------------------------------------------------------------------ MySqlOutboxStore
+
+/** The first-party store's tables on MySQL (`nest_outbox_*`, in the application's database), and the application's. */
+const MYSQL_TABLES = ['nest_outbox_messages', 'nest_outbox_dead_letters', 'nest_outbox_inbox', 'it_orders', 'it_invoices'];
+
+const MYSQL_BUSINESS_TABLES = [
+  'CREATE TABLE it_orders (id integer NOT NULL PRIMARY KEY)',
+  'CREATE TABLE it_invoices (id integer NOT NULL AUTO_INCREMENT PRIMARY KEY, order_id integer NOT NULL, consumer varchar(255) NOT NULL)',
+];
+
+/** The application's data access through TypeORM on MySQL: the same, with MySQL's placeholders. */
+@Injectable()
+class MySqlTypeOrmAppDatabase extends TypeOrmAppDatabase {
+  override async insertOrder(tx: EntityManager, id: number) {
+    await tx.query('INSERT INTO it_orders (id) VALUES (?)', [id]);
+  }
+
+  override async insertInvoice(tx: EntityManager, orderId: number, consumer: string) {
+    await tx.query('INSERT INTO it_invoices (order_id, consumer) VALUES (?, ?)', [orderId, consumer]);
+  }
+}
+
+const prismaMysqlClient = fixture('prisma-mysql/generated/client.ts');
+const prismaMysqlSkip = existsSync(prismaMysqlClient)
+  ? undefined
+  : 'the MySQL Prisma client is not generated (run `npm run generate:prisma`)';
+
+/** The MySQL `PrismaService`, by a computed path: its generated client is gitignored, and the PostgreSQL project doesn't generate it. */
+async function loadMysqlPrisma(): Promise<Type<any>> {
+  const { PrismaService } = await import(fixture('prisma-mysql/prisma.service.ts'));
+  return PrismaService;
+}
+
+/**
+ * `MySqlOutboxStore` as an application registers it: a factory provider that injects the database (`token`) and the
+ * registry, with which the store registers itself for both contracts.
+ */
+function mysqlOutboxStore(token: InjectionToken, executor: (db: any) => mysqlStore.SqlExecutor): Provider {
+  return {
+    provide: mysqlStore.MySqlOutboxStore,
+    inject: [token, OutboxStorage],
+    useFactory: (db: unknown, storage: OutboxStorage) => new mysqlStore.MySqlOutboxStore({ executor: executor(db) }, storage),
+  };
+}
+
+/**
+ * A MySQL database of this process for a recipe: the store's migrations applied, as `npx nest-outbox migrate` does on
+ * deploy, and the application's tables; a pool of one connection to look at it from outside.
+ */
+async function mysqlDatabase(server: TestMysql, name: string, module: (url: string) => Promise<() => DynamicModule>): Promise<RecipeDatabase> {
+  const { url } = await server.createDatabase(name);
+  const pool = mysql.createPool({ uri: url, connectionLimit: 1 });
+  pool.on('connection', (connection) => {
+    connection.query('SET SESSION lock_wait_timeout = 30');
+  });
+  await new mysqlStore.MySqlOutboxStore({ executor: mysqlStore.fromMysql2(pool) }).migrate();
+  for (const statement of MYSQL_BUSINESS_TABLES) {
+    await pool.query(statement);
+  }
+
+  const query: RecipeDatabase['query'] = async <T>(text: string, params?: unknown[]) => (await pool.query(text, params))[0] as T[];
+  return {
+    module: await module(url),
+    storeClass: mysqlStore.MySqlOutboxStore,
+    query,
+    async count(table, consumer) {
+      const from = table === 'outbox_inbox' ? 'nest_outbox_inbox' : table;
+      const where = consumer === undefined ? '' : ' WHERE consumer = ?';
+      const rows = await query<{ n: number }>(`SELECT COUNT(*) AS n FROM ${from}${where}`, consumer === undefined ? [] : [consumer]);
+      return Number(rows[0]!.n);
+    },
+    async reset() {
+      for (const table of MYSQL_TABLES) {
+        await pool.query(`DELETE FROM ${table}`);
+      }
+    },
+    close: () => pool.end(),
+  };
+}
+
+const mysqlDrizzleModule = async (url: string) => () =>
+  globalModule(
+    // DrizzleModule opens the instance's pool and ends it in onApplicationShutdown.
+    [DrizzleModule.forRoot({ drizzle: drizzleMysql, connection: { uri: url, connectionLimit: 2 } })],
+    [mysqlOutboxStore(getDrizzleToken(), mysqlStore.fromDrizzle)],
+    DrizzleAppDatabase,
+  );
+
+const mysqlTypeOrmModule = async (url: string) => () =>
+  globalModule(
+    [TypeOrmModule.forRoot({ type: 'mysql', url, poolSize: 2, retryAttempts: 0 })],
+    [mysqlOutboxStore(DataSource, mysqlStore.fromTypeOrm)],
+    MySqlTypeOrmAppDatabase,
+  );
+
+const mysqlPrismaModule = async (url: string) => {
+  const PrismaService = await loadMysqlPrisma();
+  const application = prismaApplication(PrismaService, url, () => '?');
+  return () => globalModule([], [application.service, mysqlOutboxStore(PrismaService, mysqlStore.fromPrisma)], application.database);
+};
+
 // ------------------------------------------------------------------ the list
 
 /**
@@ -514,6 +641,38 @@ export function recipes(postgres: TestPostgres | null, reason: string | undefine
       openConsumer: (name) => firstPartyPrismaDatabase(server(), `${prefix}_pgprisma_${name}`),
     },
   ];
+}
+
+/**
+ * The MySQL recipes, given the result of `startMysql()`: the first-party store through Drizzle, TypeORM and Prisma.
+ * `prefix` keeps the databases of different spec files apart (keep it short: MySQL names hold 64 characters).
+ */
+export function mysqlRecipes(server: TestMysql | null, reason: string | undefined, prefix: string): Recipe[] {
+  const skip = server ? undefined : reason;
+  const recipe = (name: string, tag: string, module: (url: string) => Promise<() => DynamicModule>, extraSkip?: string): Recipe => {
+    const open = (database: string) => mysqlDatabase(server!, `${prefix}_${tag}_${database}`, module);
+    return { name, skip: skip ?? extraSkip, refusesRoot: true, open, openConsumer: open };
+  };
+
+  return [
+    recipe('MySqlOutboxStore (fromDrizzle) on MySQL', 'mydrizzle', mysqlDrizzleModule),
+    recipe('MySqlOutboxStore (fromTypeOrm) on MySQL', 'mytypeorm', mysqlTypeOrmModule),
+    recipe('MySqlOutboxStore (fromPrisma) on MySQL', 'myprisma', mysqlPrismaModule, prismaMysqlSkip),
+  ];
+}
+
+/**
+ * The recipes of the project's database family (`sqlDialect`, vitest.config.ts): PostgreSQL's and PGlite's, or MySQL's,
+ * with what ends the server's databases of this process (await it in `afterAll`).
+ */
+export async function integrationRecipes(prefix: string): Promise<{ recipes: Recipe[]; stop(): Promise<void> }> {
+  if (inject('sqlDialect') === 'mysql') {
+    const { mysql: server, reason } = await startMysql();
+    return { recipes: mysqlRecipes(server, reason, prefix), stop: async () => server?.stop() };
+  }
+
+  const { postgres, reason } = await startPostgres();
+  return { recipes: recipes(postgres, reason, prefix), stop: async () => postgres?.stop() };
 }
 
 /** The recipe's name, with the reason when it is skipped. */
