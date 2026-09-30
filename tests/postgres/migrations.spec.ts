@@ -12,6 +12,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate as drizzleMigrate } from 'drizzle-orm/pglite/migrator';
 import { createPool as createMysqlPool } from 'mysql2/promise';
 import pg from 'pg';
+import type { SqlExecutor as AnySqlExecutor } from '@nestjs/store-kit';
 import * as root from '../../lib/index.js';
 import {
   fromDrizzle,
@@ -288,7 +289,7 @@ describe('options', () => {
     };
     // A MySQL executor is a compile error first (the options take SqlExecutor<'postgres'>), then a TypeError.
     // @ts-expect-error
-    expect(() => new PostgresOutboxStore({ executor: mysql as SqlExecutor<'mysql'> })).toThrow(
+    expect(() => new PostgresOutboxStore({ executor: mysql as AnySqlExecutor<'mysql'> })).toThrow(
       "PostgresOutboxStore runs on PostgreSQL, and `executor` is a MySQL executor: import the executor from '@nestjs/outbox/postgres' (fromPg, fromDrizzle, fromTypeOrm, fromPrisma or fromKysely).",
     );
     // The executors @nestjs/outbox/mysql exports (nothing connects: a pool opens its connections at the first statement).
