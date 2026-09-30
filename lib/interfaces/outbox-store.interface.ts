@@ -15,7 +15,8 @@ import type { Awaitable } from './awaitable.interface.js';
  * that provider in its constructor, usually together with the inbox:
  * `OutboxStorage.registerSource({ messages: this, inbox: this })`. Without one, the module
  * uses `InMemoryOutboxStore`. On PostgreSQL, `PostgresOutboxStore` from
- * `@nestjs/outbox/postgres` implements both contracts through the client you already use.
+ * `@nestjs/outbox/postgres` implements both contracts through the client you already use,
+ * and on MySQL `MySqlOutboxStore` from `@nestjs/outbox/mysql`.
  *
  * `Tx` is your data layer's transaction handle, passed through untouched: Drizzle's `tx`, a
  * TypeORM `EntityManager`, a Prisma transaction client, a `pg` `PoolClient`. The package
@@ -40,8 +41,9 @@ export interface OutboxStore<Tx = unknown> {
    *
    * Commit order: on a database that runs writers concurrently, two transactions adding
    * messages with the same key must commit in the order their rows are numbered. Take a
-   * lock per key on `tx` (PostgreSQL: `pg_advisory_xact_lock`), held until it ends, before
-   * inserting, in a fixed order. Messages without a key need no lock.
+   * lock per key on `tx` (PostgreSQL: `pg_advisory_xact_lock`; MySQL: a locking read of a
+   * lock row), held until it ends, before inserting, in a fixed order. Messages without a key
+   * need no lock.
    */
   add(tx: Tx, messages: readonly OutboxMessage[]): Awaitable<void>;
 

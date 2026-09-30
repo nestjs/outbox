@@ -1,11 +1,14 @@
-import { OutboxError } from './outbox.error.js';
+import { OutboxError } from '../errors/outbox.error.js';
 
 /**
  * A SQL store's schema can't serve this version of the package: it is behind the store's migrations (and `migrate` is
  * off), or applying them failed (`cause`). The store refuses every call until it's fixed, so the application fails to
- * start instead of losing messages.
+ * start instead of losing messages. Exported by the stores' subpaths, `@nestjs/outbox/postgres` and
+ * `@nestjs/outbox/mysql` (the same class).
  *
  * ```ts
+ * import { OutboxSchemaError } from '@nestjs/outbox/postgres';
+ *
  * try {
  *   await app.init();
  * } catch (error) {

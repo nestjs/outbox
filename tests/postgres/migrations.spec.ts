@@ -11,7 +11,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate as drizzleMigrate } from 'drizzle-orm/pglite/migrator';
 import pg from 'pg';
-import { OutboxSchemaError as RootOutboxSchemaError } from '../../lib/index.js';
+import * as root from '../../lib/index.js';
 import {
   fromDrizzle,
   fromPg,
@@ -208,7 +208,9 @@ describe('a schema behind the code', () => {
     const behind = store('m_behind', { migrate: false });
     const error = await behind.onModuleInit().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OutboxSchemaError);
-    expect(error).toBeInstanceOf(RootOutboxSchemaError);
+    expect(error).toBeInstanceOf(root.OutboxError);
+    // The stores' subpaths export it (/postgres and /mysql), not the package's root.
+    expect('OutboxSchemaError' in root).toBe(false);
     expect(error).toMatchObject({ name: 'OutboxSchemaError', schema: 'm_behind', version: 0, requiredVersion: 1 });
     expect((error as Error).message).toBe(
       'PostgresOutboxStore: schema "m_behind" is at version 0, and this version of @nestjs/outbox needs version 1. Apply its migrations: ' +

@@ -4,7 +4,7 @@
 
 // The store, and the error it fails startup with while its schema is behind
 export { PostgresOutboxStore } from './postgres-outbox.store.js';
-export { OutboxSchemaError } from '../errors/outbox-schema.error.js';
+export { OutboxSchemaError } from '../sql/outbox-schema.error.js';
 export type { PostgresOutboxStoreOptions } from './interfaces/index.js';
 
 // Executors: the store's SQL through the application's pool or ORM, and its transactions

@@ -1,18 +1,20 @@
 /**
- * The `nest-outbox` command (lib/sql/cli.ts: the kit's runStoreCli() on the SQL stores' schemas): `sql` prints what
- * migrationSql() does, `migrate` applies the migrations, `status` exits with 1 while the schema is behind, and every
- * misuse says what to do instead, in the outbox's words.
+ * The `nest-outbox` command (lib/sql/cli.ts: the kit's runStoreCli() on the SQL stores' schemas, PostgreSQL's and
+ * MySQL's): `sql` prints what migrationSql() does (PostgreSQL's unless `--dialect mysql`), `migrate` applies the
+ * migrations, `status` exits with 1 while the schema is behind, and every misuse says what to do instead, in the outbox's
+ * words. tests/mysql/cli.spec.ts runs it on MySQL.
  */
 import { runStoreCli, type StoreCliIo } from '@nestjs/store-kit';
 import { fromPg, PostgresOutboxStore } from '../../lib/postgres/index.js';
 import { postgresOutboxSchema } from '../../lib/postgres/migrations/index.js';
+import { outboxSchemas } from '../../lib/sql/outbox-schemas.js';
 import { testDatabase } from './support.js';
 
 const { database, reason } = await testDatabase('store_cli');
 
 async function run(argv: string[], env: StoreCliIo['env'] = {}) {
   const output = { out: '', err: '' };
-  const code = await runStoreCli([postgresOutboxSchema], argv, { out: (text) => (output.out += text), err: (text) => (output.err += text), env });
+  const code = await runStoreCli(outboxSchemas, argv, { out: (text) => (output.out += text), err: (text) => (output.err += text), env });
   return { code, ...output };
 }
 
@@ -38,7 +40,7 @@ describe('nest-outbox', () => {
     const help = await run(['--help']);
     expect(help).toMatchObject({ code: 0, err: '' });
     expect(help.out).toMatch(/^Usage: nest-outbox <command> \[options\]/);
-    expect(help.out).toContain("PostgresOutboxStore's schema (@nestjs/outbox/postgres):");
+    expect(help.out).toContain("PostgresOutboxStore's schema (@nestjs/outbox/postgres):\nMySqlOutboxStore's schema (@nestjs/outbox/mysql):");
     expect(help.out).toContain('Default: nest_outbox');
     expect(await run([])).toEqual({ code: 1, out: '', err: help.out });
     expect(await run(['upgrade'])).toEqual({ code: 1, out: '', err: `Unknown command "upgrade".\n\n${help.out}` });
@@ -48,15 +50,10 @@ describe('nest-outbox', () => {
   it("needs the database for migrate and status: --url, else DATABASE_URL, of a dialect it serves (never echoing the URL)", async () => {
     expect(await run(['migrate'])).toEqual({ code: 1, out: '', err: 'nest-outbox migrate needs the database: pass --url, or set DATABASE_URL.\n' });
     expect((await run(['status'])).err).toBe('nest-outbox status needs the database: pass --url, or set DATABASE_URL.\n');
-    expect(await run(['migrate', '--url', 'mysql://root:secret@127.0.0.1/shop'])).toEqual({
-      code: 1,
-      out: '',
-      err: "nest-outbox: MySQL isn't supported yet: the stores of @nestjs/outbox run on PostgreSQL.\n",
-    });
     expect(await run(['status', '--url', 'sqlite://secret.db'])).toEqual({
       code: 1,
       out: '',
-      err: 'nest-outbox status takes a database URL that starts with postgres:// or postgresql://.\n',
+      err: 'nest-outbox status takes a database URL that starts with postgres:// or postgresql:// or mysql://.\n',
     });
   });
 

@@ -6,8 +6,8 @@ import type { Awaitable } from './awaitable.interface.js';
  * `@EventPattern()` receiving `ClientProxyTransport` envelopes) implements this contract
  * alone and registers it with `OutboxStorage.registerSource({ inbox: this })`; a service
  * that also produces usually implements both in one class. Its method names don't clash with
- * `OutboxStore`'s, so one class can implement both, as `PostgresOutboxStore` from
- * `@nestjs/outbox/postgres` does.
+ * `OutboxStore`'s, so one class can implement both, as `PostgresOutboxStore`
+ * (`@nestjs/outbox/postgres`) and `MySqlOutboxStore` (`@nestjs/outbox/mysql`) do.
  *
  * `@nestjs/outbox/testing` exports `outboxInboxStoreContract()`, its test suite.
  */
@@ -18,8 +18,9 @@ export interface OutboxInboxStore<Tx = unknown> {
    * consumer's own writes (refuse a handle that is not a transaction with
    * `OutboxTransactionRequiredError`); without one, it is written at once, on the store's
    * own connection. Insert-if-absent in one statement on a unique `(consumer, messageId)`
-   * key (`ON CONFLICT DO NOTHING`), so a concurrent delivery of the same message waits for
-   * this transaction and then sees the record: never check first, then insert.
+   * key (PostgreSQL: `ON CONFLICT DO NOTHING`; MySQL: an `INSERT` whose duplicate-key error
+   * means `false`), so a concurrent delivery of the same message waits for this transaction
+   * and then sees the record: never check first, then insert.
    */
   recordInbox(tx: Tx | undefined, consumer: string, messageId: string, now: number): Awaitable<boolean>;
 
