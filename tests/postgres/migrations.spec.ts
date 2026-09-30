@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate as drizzleMigrate } from 'drizzle-orm/pglite/migrator';
+import { createPool as createMysqlPool } from 'mysql2/promise';
 import pg from 'pg';
 import * as root from '../../lib/index.js';
 import {
@@ -20,6 +21,7 @@ import {
   type SqlExecutor,
   type SqlTransaction,
 } from '../../lib/postgres/index.js';
+import { fromMysql2 } from '../../lib/mysql/index.js';
 import { postgresOutboxSchema } from '../../lib/postgres/migrations/index.js';
 import { endPool } from '../support/postgres.js';
 import { message, testDatabase } from './support.js';
@@ -287,6 +289,12 @@ describe('options', () => {
     expect(() => new PostgresOutboxStore({ executor: mysql as SqlExecutor })).toThrow(
       "PostgresOutboxStore runs on PostgreSQL, and `executor` is a MySQL executor: import the executor from '@nestjs/outbox/postgres' (fromPg, fromDrizzle, fromTypeOrm, fromPrisma or fromKysely).",
     );
+    // The executors @nestjs/outbox/mysql exports (nothing connects: a pool opens its connections at the first statement).
+    const mysqlPool = createMysqlPool({ host: '127.0.0.1', port: 1, connectionLimit: 1 });
+    expect(() => new PostgresOutboxStore({ executor: fromMysql2(mysqlPool) as never })).toThrow(
+      "PostgresOutboxStore runs on PostgreSQL, and `executor` is a MySQL executor: import the executor from '@nestjs/outbox/postgres'",
+    );
+    expect(() => fromPg(mysqlPool as never)).toThrow('fromPg() takes a node-postgres Pool (or a connected Client), not a mysql2 pool or connection');
     expect(() => new PostgresOutboxStore({ executor: fromPg(pool()), migrate: 'yes' as unknown as boolean })).toThrow(
       'PostgresOutboxStore: `migrate` must be true or false, not "yes".',
     );
