@@ -88,6 +88,25 @@ describe.each(targets)('$name', ({ schema, open, postgres, skip }) => {
     expect(await claimed()).toEqual([]);
   });
 
+  it('add() in a REPEATABLE READ transaction commits with its row, and rolls back with it', async () => {
+    const [committed, rolledBack] = [randomUUID(), randomUUID()];
+    const added = message('order.placed', `order-${committed}`);
+    await client.transaction(async (tx) => {
+      await client.insertOrder(tx, committed);
+      await store.add(tx, [added]);
+    }, 'repeatable read');
+    await expect(
+      client.transaction(async (tx) => {
+        await client.insertOrder(tx, rolledBack);
+        await store.add(tx, [message('order.placed', `order-${rolledBack}`)]);
+        throw new Error('payment declined');
+      }, 'repeatable read'),
+    ).rejects.toThrow('payment declined');
+
+    expect([await orders(committed), await orders(rolledBack)]).toEqual([1, 0]);
+    expect(await claimed()).toEqual([added.id]);
+  });
+
   it("recordInbox() in the application's transaction commits with its row; a later delivery is a duplicate", async () => {
     const id = randomUUID();
     await client.transaction(async (tx) => {

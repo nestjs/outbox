@@ -53,7 +53,8 @@ describe.each(clients.map((factory, i) => ({ factory, schema: `race_${i}` })))('
   onPostgres();
   const opened = useStore(factory, schema);
 
-  it('publishes a key in the order its producers commit, however their transactions overlap', async () => {
+  // add() doesn't rely on the application's isolation level: the key's lock and the sequence number keep commit order.
+  it.each(['read committed', 'repeatable read'] as const)('publishes a key in the order its producers commit, however their transactions overlap (%s)', async (isolation) => {
     const { client, store } = opened;
     const producers = 12;
     // The seq of each message as the relay publishes it: a producer that committed later must never have a smaller one.
@@ -81,7 +82,7 @@ describe.each(clients.map((factory, i) => ({ factory, schema: `race_${i}` })))('
           await store.add(tx, [message(`step-${i}`, 'order-1')]);
           // The earlier producers hold their transactions longest: without the key's lock, later inserts commit first.
           await sleep((producers - i) * 3 + Math.random() * 5);
-        }),
+        }, isolation),
       ),
     );
     producing = false;
