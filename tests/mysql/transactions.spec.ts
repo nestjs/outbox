@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import type mysql from 'mysql2/promise';
 import { OutboxTransactionRequiredError } from '../../lib/index.js';
-import { MySqlOutboxStore } from '../../lib/mysql/index.js';
+import { MySqlOutboxStore, type SqlExecutor } from '../../lib/mysql/index.js';
 import { clients, message, mysql2Client, onMysql, rows, testDatabase, truncate, type Client } from './support.js';
 
 const { database, reason } = await testDatabase('transactions');
@@ -156,5 +156,30 @@ describe(`${mysql2Client.name} on MySQL: a connection outside a transaction`, ()
     }
     expect(await rows(database!.admin, 'SELECT id FROM tx_begin_messages')).toEqual([]);
     expect(await store.hasInbox('billing', 'm-1')).toBe(false);
+  });
+});
+
+describe("the kit's refusal of anything but a transaction, recognized by its code", () => {
+  /** A MySQL executor whose transaction objects fail at their first statement with `error`, as mysql2's refuses a connection outside a transaction. */
+  function failingAtFirstStatement(error: Error): SqlExecutor {
+    const fail = async (): Promise<never> => {
+      throw error;
+    };
+    return { dialect: 'mysql', query: fail, execute: fail, transaction: fail, wrapTransaction: () => ({ query: fail, execute: fail }) };
+  }
+
+  it('becomes OutboxTransactionRequiredError with the refusal as its cause, where any other TypeError goes through as it is', async () => {
+    const refusal = Object.assign(new TypeError("The mysql2 connection isn't in a transaction: call beginTransaction() on it first, or each statement commits on its own."), {
+      code: 'ERR_SQL_NOT_A_TRANSACTION',
+    });
+    const refused = await new MySqlOutboxStore({ executor: failingAtFirstStatement(refusal) }).add({}, [message('order.placed')]).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(OutboxTransactionRequiredError);
+    expect(refused).toMatchObject({ message: expect.stringContaining("MySqlOutboxStore.add(): The mysql2 connection isn't in a transaction"), cause: refusal });
+
+    // A statement's own mistake (here, a placeholder count) at the first statement is no refusal of the transaction.
+    const mistake = new TypeError("A MySQL statement's ? placeholders must match its params: this one has 2 placeholders and 1 param.");
+    const store = new MySqlOutboxStore({ executor: failingAtFirstStatement(mistake) });
+    expect(await store.recordInbox({}, 'billing', 'm-1', 1).catch((e: unknown) => e)).toBe(mistake);
+    expect(await store.add({}, [message('order.placed')]).catch((e: unknown) => e)).toBe(mistake);
   });
 });

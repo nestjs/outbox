@@ -1,6 +1,7 @@
 import { Logger, type OnModuleInit } from '@nestjs/common';
 import {
   columns,
+  isNotATransactionError,
   lockKeys,
   mysqlErrorCode,
   quoteTable,
@@ -558,11 +559,13 @@ FROM ${this.t.deadLetters} d WHERE ${i.in('d.id', chunk)} ORDER BY d.seq`,
   /**
    * The application's transaction; anything else (the database, the pool) is refused before any statement. A mysql2
    * connection outside a transaction is refused at its first statement (the kit reads the server's status then, before
-   * anything is written): the same error.
+   * anything is written): the same error. The kit's refusals (`isNotATransactionError()`: their code, never their class)
+   * become `OutboxTransactionRequiredError`, with the refusal as the cause; any other error, a statement's own
+   * `TypeError` included, goes through as it is.
    */
   private inTransaction(transaction: unknown, method: string): SqlTransaction {
     const refused = (error: unknown) =>
-      error instanceof TypeError ? new OutboxTransactionRequiredError(`MySqlOutboxStore.${method}(): ${error.message}`, { cause: error }) : error;
+      isNotATransactionError(error) ? new OutboxTransactionRequiredError(`MySqlOutboxStore.${method}(): ${error.message}`, { cause: error }) : error;
     let tx: SqlTransaction;
     try {
       tx = this.executor.wrapTransaction(transaction);

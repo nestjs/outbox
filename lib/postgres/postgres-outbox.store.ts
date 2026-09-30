@@ -2,6 +2,7 @@ import { Logger, type OnModuleInit } from '@nestjs/common';
 import {
   advisoryLock,
   columns,
+  isNotATransactionError,
   quoteSchema,
   SqlParams,
   type MigrationSqlOptions,
@@ -436,12 +437,16 @@ SELECT count(*)::text AS n FROM pruned`,
 
   // ---------------------------------------------------------------- internals
 
-  /** The application's transaction; anything else (the database, the pool) is refused before any statement. */
+  /**
+   * The application's transaction; anything else (the database, the pool) is refused before any statement. The kit's
+   * refusal (`isNotATransactionError()`: its code, never its class) becomes `OutboxTransactionRequiredError`, with it
+   * as the cause; any other error goes through as it is.
+   */
   private inTransaction(transaction: unknown, method: string): SqlTransaction {
     try {
       return this.executor.wrapTransaction(transaction);
     } catch (error) {
-      if (error instanceof TypeError) {
+      if (isNotATransactionError(error)) {
         throw new OutboxTransactionRequiredError(`PostgresOutboxStore.${method}(): ${error.message}`, { cause: error });
       }
       throw error;

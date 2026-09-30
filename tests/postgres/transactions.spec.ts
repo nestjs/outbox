@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import { OutboxTransactionRequiredError } from '../../lib/index.js';
-import { PostgresOutboxStore } from '../../lib/postgres/index.js';
+import { PostgresOutboxStore, type SqlExecutor } from '../../lib/postgres/index.js';
 import { clients, message, openPglite, pgClient, testDatabase, truncate, type Client } from './support.js';
 
 const { database, reason } = await testDatabase('store_transactions');
@@ -192,5 +192,36 @@ describe(`${pgClient.name} on PostgreSQL: a client before BEGIN`, () => {
       connection.release();
     }
     expect((await store.stats(1)).pending).toBe(0);
+  });
+});
+
+describe("the kit's refusal of anything but a transaction, recognized by its code", () => {
+  /** A PostgreSQL executor whose `wrapTransaction()` throws `error`, as the kit's refuse the database or the pool. */
+  function refusing(error: Error): SqlExecutor<'postgres'> {
+    const fail = async (): Promise<never> => {
+      throw error;
+    };
+    return {
+      dialect: 'postgres',
+      query: fail,
+      execute: fail,
+      transaction: fail,
+      wrapTransaction: () => {
+        throw error;
+      },
+    };
+  }
+
+  it('becomes OutboxTransactionRequiredError with the refusal as its cause, where any other TypeError goes through as it is', async () => {
+    const refusal = Object.assign(new TypeError('Pass the tx your db.transaction() callback receives, not the database: a statement on the database runs outside your transaction.'), {
+      code: 'ERR_SQL_NOT_A_TRANSACTION',
+    });
+    const refused = await new PostgresOutboxStore({ executor: refusing(refusal) }).add({}, [message('order.placed')]).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(OutboxTransactionRequiredError);
+    expect(refused).toMatchObject({ message: expect.stringContaining('PostgresOutboxStore.add(): Pass the tx your db.transaction() callback receives'), cause: refusal });
+
+    const other = new TypeError('something else');
+    const store = new PostgresOutboxStore({ executor: refusing(other) });
+    expect(await store.recordInbox({}, 'billing', 'm-1', 1).catch((e: unknown) => e)).toBe(other);
   });
 });
