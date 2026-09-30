@@ -10,10 +10,10 @@ export const KEY_LENGTH = 255;
 
 /**
  * How many lock rows the message keys share. A key's producers take turns on the row of its bucket (see
- * `keyLocks()`), so the kit's `<schema>_locks` table holds at most this many rows for them, however many keys pass
- * through. It is part of how instances agree: every process that adds to a schema must use the same number, so it
- * never changes for a schema. Two keys share a bucket with a chance of 1 in 16,384: then their producers take turns
- * too.
+ * `keyLocks()`), so the kit's `<schema>_locks` table holds this many rows for them (created at startup, see
+ * `bucketLocks()`), however many keys pass through. It is part of how instances agree: every process that adds to a
+ * schema must use the same number, so it never changes for a schema. Two keys share a bucket with a chance of 1 in
+ * 16,384: then their producers take turns too.
  */
 export const KEY_BUCKETS = 16_384;
 
@@ -21,6 +21,9 @@ export const KEY_BUCKETS = 16_384;
 export function keyBucket(key: string): number {
   return createHash('sha256').update(key, 'utf8').digest().readUInt32BE(0) % KEY_BUCKETS;
 }
+
+/** The lock key of a bucket. */
+const bucketLock = (bucket: number) => `key-bucket:${bucket}`;
 
 /** The lock keys of `keys`' buckets, each once (`lockKeys()` orders them): none for messages without a key. */
 export function keyLocks(keys: Iterable<string | null>): string[] {
@@ -30,7 +33,15 @@ export function keyLocks(keys: Iterable<string | null>): string[] {
       buckets.add(keyBucket(key));
     }
   }
-  return [...buckets].map((bucket) => `key-bucket:${bucket}`);
+  return [...buckets].map(bucketLock);
+}
+
+/**
+ * The lock keys of every bucket, whose rows the store creates at startup (the kit's `ensureLockRows()`): a producer
+ * then never creates one in the application's transaction, whose rollback would deadlock the producers waiting for it.
+ */
+export function bucketLocks(): string[] {
+  return Array.from({ length: KEY_BUCKETS }, (_, bucket) => bucketLock(bucket));
 }
 
 /**

@@ -4,12 +4,13 @@
  * through every client taking every claimable message between them, a key's run with one owner; a producer's
  * rollback, which burns an AUTO_INCREMENT value the relay never waits for; a claim that meets a key whose head another
  * connection is writing; keys that share a lock bucket (their producers take turns: the false contention, measured),
- * ordered all the same; the lock table bounded by the buckets while producers churn through many more keys; and a
- * deadlock in the application's transaction, which reaches the application as MySQL's error 1213.
+ * ordered all the same; the lock table's rows, one per bucket, created at startup, however many keys producers churn
+ * through; and a producer's rollback while others wait for its bucket, which deadlocks them only when the bucket's row
+ * is missing (MySQL's error 1213 in the application's transaction, which runs it again).
  */
 import { randomUUID } from 'node:crypto';
 import mysql from 'mysql2/promise';
-import { mysqlErrorCode } from '@nestjs/store-kit/mysql';
+import { lockRowId, mysqlErrorCode } from '@nestjs/store-kit/mysql';
 import { fromMysql2, MySqlOutboxStore } from '../../lib/mysql/index.js';
 import { KEY_BUCKETS, keyBucket } from '../../lib/mysql/mysql-outbox-keys.util.js';
 import { clients, message, mysql2Client, onMysql, POOL_SIZE, rows, testDatabase, truncate, type Client, type ClientFactory } from './support.js';
@@ -263,8 +264,12 @@ describe(`${mysql2Client.name}: the lock rows`, () => {
   onMysql(reason);
   const opened = useStore(mysql2Client, 'race_bounded');
 
-  it('stay one per bucket while producers churn through many more keys, taking the buckets in one order', async () => {
+  it('are one per bucket and the claim lock, created at startup, however many keys producers churn through in one order', async () => {
     const { client, store } = opened;
+    const locks = async () => (await rows<{ id: string }>(database!.admin, 'SELECT id FROM race_bounded_locks ORDER BY id')).map((row) => row.id);
+    const expected = ['claim', ...Array.from({ length: KEY_BUCKETS }, (_, bucket) => `key-bucket:${bucket}`)].map(lockRowId).sort();
+    expect(await locks()).toEqual(expected);
+
     const keys = Array.from({ length: 40_000 }, (_, i) => `customer-${i}`);
     // Four producers at once, each adding 1,000 keys a transaction: overlapping buckets, taken in the lock rows' order.
     const producers = Array.from({ length: 4 }, async (_, p) => {
@@ -275,13 +280,13 @@ describe(`${mysql2Client.name}: the lock rows`, () => {
     await Promise.all(producers);
     await store.claim({ owner: 'r1', now: 10, leaseMs: 1_000, limit: 1 });
 
-    const buckets = new Set(keys.map((key) => keyBucket(key))).size;
-    const [{ n }] = await rows<{ n: number }>(database!.admin, 'SELECT COUNT(*) AS n FROM race_bounded_locks');
-    // A row per bucket the keys fell in, and the claim's.
-    expect(n).toBe(buckets + 1);
-    expect(n).toBeLessThanOrEqual(KEY_BUCKETS + 1);
-    expect(n).toBeLessThan(keys.length / 2);
+    expect(await locks()).toEqual(expected);
     expect((await store.stats(10)).pending).toBe(keys.length);
+
+    // Another process starting on the schema only notes them: it creates none, and takes no lock.
+    const starting = new MySqlOutboxStore({ executor: client.executor, schema: 'race_bounded', migrate: false });
+    await starting.onModuleInit();
+    expect(await locks()).toEqual(expected);
   });
 });
 
@@ -303,14 +308,15 @@ describe(`${mysql2Client.name}: a deadlock in the application's transaction`, ()
     return n;
   }
 
-  it("reaches the application as MySQL's error 1213: its transaction was rolled back, and running it again adds the message", async () => {
+  /**
+   * The first of the pool's connections adds a message of `key` in a transaction, the others add one of it in theirs
+   * and wait for its bucket's lock, then the first rolls back: what became of the others' (MySQL's error number of those
+   * that failed).
+   */
+  async function rollBackWhileOthersWait(key: string): Promise<Array<string | number>> {
     const { client, store } = opened;
-    // A bucket's lock row doesn't exist before its first message. The first producer creates it and rolls back while
-    // others wait for it: MySQL breaks the lock waits it leaves behind by rolling some of them back.
-    const key = `fresh-${randomUUID()}`;
     const pool = client.root as mysql.Pool;
     const connections = await Promise.all(Array.from({ length: POOL_SIZE }, () => pool.getConnection()));
-    let settled: Array<string | number>;
     try {
       const threads = await Promise.all(connections.map(async (c) => ((await c.query('SELECT CONNECTION_ID() AS id'))[0] as Array<{ id: number }>)[0]!.id));
       const [creator, ...others] = connections;
@@ -331,12 +337,31 @@ describe(`${mysql2Client.name}: a deadlock in the application's transaction`, ()
         // The others are on their way to the bucket's row.
       }
       await creator!.rollback();
-      settled = await Promise.all(outcomes);
+      return await Promise.all(outcomes);
     } finally {
       for (const connection of connections) {
         connection.release();
       }
     }
+  }
+
+  const waiters = Array.from({ length: POOL_SIZE - 1 }, (_, i) => `waiter-${i}`);
+
+  it("doesn't come of a producer's rollback while others wait for its key's bucket: the bucket's row exists from startup", async () => {
+    const { store } = opened;
+    expect(await rollBackWhileOthersWait(`fresh-${randomUUID()}`)).toEqual(waiters.map(() => 'committed'));
+    const claimed = await store.claim({ owner: 'r1', now: 10, leaseMs: 1_000, limit: 10 });
+    expect(claimed.map((m) => m.topic).sort()).toEqual(waiters);
+  });
+
+  it("reaches the application as MySQL's error 1213: its transaction was rolled back, and running it again adds the message", async () => {
+    const { client, store } = opened;
+    // Without its bucket's lock row (deleted here, as a store that didn't create its rows at startup would have none),
+    // the first producer creates it and rolls back while others wait for it: MySQL breaks the lock waits it leaves
+    // behind by rolling some of them back.
+    const key = `fresh-${randomUUID()}`;
+    await database!.admin.query('DELETE FROM race_deadlock_locks WHERE id = ?', [lockRowId(`key-bucket:${keyBucket(key)}`)]);
+    const settled = await rollBackWhileOthersWait(key);
 
     expect(settled.every((outcome) => outcome === 'committed' || outcome === 1213)).toBe(true);
     expect(settled).toContain(1213);

@@ -1,6 +1,7 @@
 import { Logger, type OnModuleInit } from '@nestjs/common';
 import {
   columns,
+  ensureLockRows,
   isNotATransactionError,
   lockKeys,
   mysqlErrorCode,
@@ -29,7 +30,7 @@ import { DEAD_LETTER_COLUMNS, MESSAGE_COLUMNS, toDeadLetter, toMessage, type Row
 import type { OutboxStorage } from '../storage/outbox.storage.js';
 import type { MySqlOutboxStoreOptions } from './interfaces/mysql-outbox-store-options.interface.js';
 import { mysqlOutboxSchema } from './migrations/index.js';
-import { checkLength, keyLocks } from './mysql-outbox-keys.util.js';
+import { bucketLocks, checkLength, keyLocks } from './mysql-outbox-keys.util.js';
 
 /** ER_DUP_ENTRY: a duplicate key. MySQL rolls the statement back, not the transaction, which goes on. */
 const DUPLICATE_KEY = 1062;
@@ -77,7 +78,8 @@ const BATCH_JSON_LENGTH = 1 << 20;
  *
  * Given `storage`, it registers itself for both contracts (`storage.registerSource({ messages: this, inbox: this })`),
  * in a service that only consumes too: the tables it doesn't use stay empty. It checks the server and its schema, or
- * migrates it (`migrate`), in `onModuleInit` (so before the relay starts), or at its first call outside Nest.
+ * migrates it (`migrate`), then creates the rows of its locks (the claim's, and the 16,384 buckets the message keys
+ * share), in `onModuleInit` (so before the relay starts), or at its first call outside Nest.
  *
  * Ids, topics, keys and consumer names are compared byte for byte, and hold at most 255 characters (a longer one fails
  * with a `RangeError` before any statement). Keys differing only in case or accents are different keys.
@@ -135,6 +137,8 @@ export class MySqlOutboxStore implements OutboxStore, OutboxInboxStore, OnModule
   private readonly t: Record<'messages' | 'deadLetters' | 'inbox', string>;
   /** The server and the schema checked, the schema migrated (`migrate`), before the first statement. */
   private readonly readiness: StoreReadiness;
+  /** The rows of the store's locks, created once the schema is ready (see `ready()`). */
+  private lockRows?: Promise<void>;
 
   constructor(options: MySqlOutboxStoreOptions, storage?: OutboxStorage) {
     const resolved = mysqlOutboxSchema.resolveOptions(options);
@@ -146,9 +150,12 @@ export class MySqlOutboxStore implements OutboxStore, OutboxInboxStore, OnModule
     storage?.registerSource({ messages: this, inbox: this });
   }
 
-  /** Checks the server, and migrates the schema (`migrate`) or checks it, before the relay starts. */
+  /**
+   * Checks the server, migrates the schema (`migrate`) or checks it, and creates the rows of the store's locks, before
+   * the relay starts.
+   */
   async onModuleInit(): Promise<void> {
-    await this.readiness.ready();
+    await this.ready();
   }
 
   /**
@@ -235,7 +242,7 @@ ORDER BY j.n`,
    */
   async claim({ owner, now, leaseMs, limit }: OutboxClaimRequest): Promise<OutboxMessage[]> {
     checkLength(owner, 'a lease owner', 'claim');
-    await this.readiness.ready();
+    await this.ready();
 
     const at = epochMs(now);
     const until = epochMs(now + leaseMs);
@@ -293,7 +300,7 @@ WHERE seq IN (${taken.map((row) => `CAST(${u.text(row.seq)} AS SIGNED)`).join(',
 
   /** One `DELETE`, fenced by the lease owner. */
   async markPublished(id: string, owner: string): Promise<boolean> {
-    await this.readiness.ready();
+    await this.ready();
     const p = new SqlParams();
     const { affectedRows } = await this.executor.execute(
       `DELETE FROM ${this.t.messages} WHERE id = ${p.text(id)} AND lease_owner = ${p.text(owner)}`,
@@ -304,7 +311,7 @@ WHERE seq IN (${taken.map((row) => `CAST(${u.text(row.seq)} AS SIGNED)`).join(',
 
   /** One `UPDATE`, fenced by the lease owner, that appends to the history in the statement that checks the lease. */
   async reschedule(id: string, owner: string, update: OutboxRescheduleUpdate): Promise<boolean> {
-    await this.readiness.ready();
+    await this.ready();
     const p = new SqlParams();
     const { affectedRows } = await this.executor.execute(
       `UPDATE ${this.t.messages}
@@ -322,7 +329,7 @@ WHERE id = ${p.text(id)} AND lease_owner = ${p.text(owner)}`,
    * the same id (a producer that reused a custom id).
    */
   async deadLetter(id: string, owner: string, update: OutboxDeadLetterUpdate): Promise<boolean> {
-    await this.readiness.ready();
+    await this.ready();
     return retryOnDeadlock(this.executor, async (tx) => {
       const p = new SqlParams();
       const [held] = await tx.query<Row>(
@@ -355,7 +362,7 @@ FROM ${this.t.messages} m WHERE m.seq = CAST(${i.text(held.seq!)} AS SIGNED)`,
       return 0;
     }
 
-    await this.readiness.ready();
+    await this.ready();
     return retryOnDeadlock(this.executor, async (tx) => {
       let released = 0;
       for (const chunk of chunks(ids)) {
@@ -377,7 +384,7 @@ FROM ${this.t.messages} m WHERE m.seq = CAST(${i.text(held.seq!)} AS SIGNED)`,
    * 20,000 messages, where the running count takes milliseconds.)
    */
   async stats(now: number): Promise<OutboxStoreStats> {
-    await this.readiness.ready();
+    await this.ready();
     const p = new SqlParams();
     const at = epochMs(now);
     const [row] = await this.executor.query<Row>(
@@ -411,7 +418,7 @@ FROM ${this.t.messages} m WHERE m.seq = CAST(${i.text(held.seq!)} AS SIGNED)`,
   /** Newest first; ids that failed at the same time in byte order (the id column's binary collation). */
   async listDeadLetters(query: OutboxDeadLetterQuery): Promise<OutboxDeadLetter[]> {
     const { limit, offset } = deadLetterPage(query);
-    await this.readiness.ready();
+    await this.ready();
 
     const p = new SqlParams();
     const where = [
@@ -427,7 +434,7 @@ ORDER BY d.failed_at DESC, d.id DESC LIMIT ${p.limit(limit)} OFFSET ${p.limit(of
   }
 
   async getDeadLetter(id: string): Promise<OutboxDeadLetter | undefined> {
-    await this.readiness.ready();
+    await this.ready();
     const p = new SqlParams();
     const [row] = await this.executor.query<Row>(
       `SELECT ${columns(DEAD_LETTER_COLUMNS, 'd')} FROM ${this.t.deadLetters} d WHERE d.id = ${p.text(id)}`,
@@ -448,7 +455,7 @@ ORDER BY d.failed_at DESC, d.id DESC LIMIT ${p.limit(limit)} OFFSET ${p.limit(of
       return 0;
     }
 
-    await this.readiness.ready();
+    await this.ready();
     return retryOnDeadlock(this.executor, async (tx) => {
       const p = new SqlParams();
       const matched = await tx.query<Row>(
@@ -493,7 +500,7 @@ FROM ${this.t.deadLetters} d WHERE ${i.in('d.id', chunk)} ORDER BY d.seq`,
       return 0;
     }
 
-    await this.readiness.ready();
+    await this.ready();
     return retryOnDeadlock(this.executor, async (tx) => {
       const p = new SqlParams();
       const { affectedRows } = await tx.execute(`DELETE FROM ${this.t.deadLetters} AS d WHERE ${this.deadLetterWhere(p, conditions)}`, p.values);
@@ -517,7 +524,7 @@ FROM ${this.t.deadLetters} d WHERE ${i.in('d.id', chunk)} ORDER BY d.seq`,
     }
     checkLength(consumer, 'a consumer name', 'recordInbox');
     checkLength(messageId, 'a message id', 'recordInbox');
-    await (transaction === undefined ? this.readiness.ready() : this.readiness.readyIn(db));
+    await (transaction === undefined ? this.ready() : this.readiness.readyIn(db));
 
     const p = new SqlParams();
     try {
@@ -542,7 +549,7 @@ FROM ${this.t.deadLetters} d WHERE ${i.in('d.id', chunk)} ORDER BY d.seq`,
   async hasInbox(consumer: string, messageId: string): Promise<boolean> {
     checkLength(consumer, 'a consumer name', 'hasInbox');
     checkLength(messageId, 'a message id', 'hasInbox');
-    await this.readiness.ready();
+    await this.ready();
     const p = new SqlParams();
     const rows = await this.executor.query<Row>(
       `SELECT CAST(1 AS CHAR) AS found FROM ${this.t.inbox} WHERE consumer = ${p.text(consumer)} AND message_id = ${p.text(messageId)} LIMIT 1`,
@@ -553,7 +560,7 @@ FROM ${this.t.deadLetters} d WHERE ${i.in('d.id', chunk)} ORDER BY d.seq`,
 
   /** One `DELETE`, in a READ COMMITTED transaction (no gap locks that would hold up the records being written). */
   async pruneInbox(before: number): Promise<number> {
-    await this.readiness.ready();
+    await this.ready();
     return retryOnDeadlock(this.executor, async (tx) => {
       const p = new SqlParams();
       const { affectedRows } = await tx.execute(`DELETE FROM ${this.t.inbox} WHERE processed_at < ${p.bigint(Math.ceil(before))}`, p.values);
@@ -562,6 +569,29 @@ FROM ${this.t.deadLetters} d WHERE ${i.in('d.id', chunk)} ORDER BY d.seq`,
   }
 
   // ---------------------------------------------------------------- internals
+
+  /** The store's readiness (the server and the schema), then the rows of its locks: before its own first statement. */
+  private async ready(): Promise<void> {
+    await this.readiness.ready();
+    await (this.lockRows ??= this.createLockRows());
+  }
+
+  /**
+   * Creates the rows of every lock the store takes, the claim lock's and the 16,384 buckets', with the kit's
+   * `ensureLockRows()`: in transactions of their own, which commit before any transaction takes those locks. When the
+   * transaction that created a lock's row rolls back, MySQL makes the transactions waiting for that row deadlock
+   * (1213): without the rows, a bucket's first producer, in the application's transaction, would create its row, and
+   * its rollback would deadlock the producers waiting for the bucket. The rows there already are only noted, by reads
+   * that take no lock (a starting process never waits for a producer's transaction). A failure is tried again at the
+   * next call. (An `add()` that is the store's first call, inside the application's transaction before `onModuleInit()`
+   * or any call outside one, creates the rows it locks there.)
+   */
+  private createLockRows(): Promise<void> {
+    return ensureLockRows(this.executor, this.schema, [CLAIM_LOCK, ...bucketLocks()]).catch((error: unknown) => {
+      this.lockRows = undefined;
+      throw error;
+    });
+  }
 
   /**
    * The application's transaction; anything else (the database, the pool) is refused before any statement. A mysql2
