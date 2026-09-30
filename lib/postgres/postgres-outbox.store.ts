@@ -83,8 +83,9 @@ export class PostgresOutboxStore implements OutboxStore, OutboxInboxStore, OnMod
    * The schema version this version of the package needs: its last migration.
    *
    * ```ts
-   * const [{ version }] = await db.execute(sql`SELECT max(version) AS version FROM nest_outbox.migrations`);
-   * const behind = version < PostgresOutboxStore.schemaVersion;
+   * // Drizzle on node-postgres: execute() resolves to node-postgres's result, whose `rows` are the rows
+   * const { rows } = await db.execute<{ version: number | null }>(sql`SELECT max(version) AS version FROM nest_outbox.migrations`);
+   * const behind = (rows[0]?.version ?? 0) < PostgresOutboxStore.schemaVersion;
    * ```
    */
   static readonly schemaVersion = postgresOutboxSchema.latest;

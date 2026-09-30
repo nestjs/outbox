@@ -62,7 +62,8 @@ const BATCH_JSON_LENGTH = 1 << 20;
  *
  * @Module({
  *   imports: [
- *     DrizzleModule.forRoot({ drizzle, connection: { uri: process.env.DATABASE_URL! }, schema }),
+ *     // `mode: 'default'`: Drizzle's MySQL driver takes a schema only with a mode ('planetscale' is Vitess's)
+ *     DrizzleModule.forRoot({ drizzle, connection: { uri: process.env.DATABASE_URL! }, schema, mode: 'default' }),
  *     OutboxModule.forRoot({ relay: { lease: '30s' } }),
  *   ],
  *   providers: [
