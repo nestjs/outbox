@@ -15,7 +15,7 @@ export interface MySqlOutboxStoreOptions {
    * transaction object: Drizzle's `tx`, a TypeORM `EntityManager`, a Prisma transaction client, a Kysely `Transaction`,
    * a mysql2 connection after `beginTransaction()`.
    */
-  executor: SqlExecutor;
+  executor: SqlExecutor<'mysql'>;
   /**
    * The name the store's tables start with, in the connection's database: `<schema>_messages`,
    * `<schema>_dead_letters` and `<schema>_inbox`, next to `<schema>_migrations` and `<schema>_locks`. Keep it for the

@@ -48,11 +48,11 @@ const pool = () => {
   return opened;
 };
 
-const store = (schema: string, options: { migrate?: boolean; executor?: SqlExecutor } = {}) =>
+const store = (schema: string, options: { migrate?: boolean; executor?: SqlExecutor<'postgres'> } = {}) =>
   new PostgresOutboxStore({ executor: options.executor ?? fromPg(pool()), schema, migrate: options.migrate });
 
 /** An executor that records every statement it runs, and its parameters. */
-function recording(executor: SqlExecutor): { executor: SqlExecutor; statements: Array<{ text: string; params?: readonly unknown[] }> } {
+function recording(executor: SqlExecutor<'postgres'>): { executor: SqlExecutor<'postgres'>; statements: Array<{ text: string; params?: readonly unknown[] }> } {
   const statements: Array<{ text: string; params?: readonly unknown[] }> = [];
   const record = (tx: SqlTransaction): SqlTransaction => ({
     query: (text, params) => {
@@ -278,7 +278,7 @@ describe('options', () => {
   });
 
   it('refuse an executor that is none or of another database, and a migrate that is no boolean', () => {
-    expect(() => new PostgresOutboxStore({ executor: {} as SqlExecutor })).toThrow('PostgresOutboxStore: `executor` must be a SqlExecutor');
+    expect(() => new PostgresOutboxStore({ executor: {} as SqlExecutor<'postgres'> })).toThrow('PostgresOutboxStore: `executor` must be a SqlExecutor');
     const executor = fromPg(pool());
     const mysql = {
       dialect: 'mysql',
@@ -286,12 +286,15 @@ describe('options', () => {
       transaction: executor.transaction.bind(executor),
       wrapTransaction: executor.wrapTransaction.bind(executor),
     };
-    expect(() => new PostgresOutboxStore({ executor: mysql as SqlExecutor })).toThrow(
+    // A MySQL executor is a compile error first (the options take SqlExecutor<'postgres'>), then a TypeError.
+    // @ts-expect-error
+    expect(() => new PostgresOutboxStore({ executor: mysql as SqlExecutor<'mysql'> })).toThrow(
       "PostgresOutboxStore runs on PostgreSQL, and `executor` is a MySQL executor: import the executor from '@nestjs/outbox/postgres' (fromPg, fromDrizzle, fromTypeOrm, fromPrisma or fromKysely).",
     );
     // The executors @nestjs/outbox/mysql exports (nothing connects: a pool opens its connections at the first statement).
     const mysqlPool = createMysqlPool({ host: '127.0.0.1', port: 1, connectionLimit: 1 });
-    expect(() => new PostgresOutboxStore({ executor: fromMysql2(mysqlPool) as never })).toThrow(
+    // @ts-expect-error
+    expect(() => new PostgresOutboxStore({ executor: fromMysql2(mysqlPool) })).toThrow(
       "PostgresOutboxStore runs on PostgreSQL, and `executor` is a MySQL executor: import the executor from '@nestjs/outbox/postgres'",
     );
     expect(() => fromPg(mysqlPool as never)).toThrow('fromPg() takes a node-postgres Pool (or a connected Client), not a mysql2 pool or connection');

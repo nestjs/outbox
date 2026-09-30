@@ -14,7 +14,7 @@ export interface PostgresOutboxStoreOptions {
    * run on it, and `add()` and `recordInbox()` take that client's transaction object: Drizzle's `tx`, a TypeORM
    * `EntityManager`, a Prisma transaction client, a Kysely `Transaction`, a node-postgres client after `BEGIN`.
    */
-  executor: SqlExecutor;
+  executor: SqlExecutor<'postgres'>;
   /**
    * The schema that holds the store's tables (`messages`, `dead_letters`, `inbox`), created by its first migration:
    * keep it for the store alone. Letters, digits and underscores, not starting with a digit, at most 63 characters.

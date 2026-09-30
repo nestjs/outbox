@@ -288,7 +288,9 @@ describe('options, without a database', () => {
       'MySqlOutboxStore: `executor` must be a SqlExecutor, such as fromMysql2(pool), fromDrizzle(db), fromTypeOrm(dataSource), fromPrisma(prisma) or fromKysely(db).',
     );
     const postgres = fromPg(new pg.Pool({ connectionString: 'postgres://nobody@127.0.0.1:1/none' }));
-    expect(() => new MySqlOutboxStore({ executor: postgres as never })).toThrow(
+    // A PostgreSQL executor is a compile error first (the options take SqlExecutor<'mysql'>), then a TypeError.
+    // @ts-expect-error
+    expect(() => new MySqlOutboxStore({ executor: postgres })).toThrow(
       "MySqlOutboxStore runs on MySQL, and `executor` is a PostgreSQL executor: import the executor from '@nestjs/outbox/mysql' (fromMysql2, fromDrizzle, fromTypeOrm, fromPrisma or fromKysely).",
     );
     expect(() => new MySqlOutboxStore({ executor: executor(), migrate: 'yes' as unknown as boolean })).toThrow(

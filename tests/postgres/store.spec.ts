@@ -13,7 +13,7 @@ import { message, openPglite, pgClient, testDatabase, truncate, type Client } fr
 const { database, reason } = await testDatabase('store_behaviour');
 
 /** `executor`, recording the statements it runs, its transactions' and the application's included. */
-function recording(executor: SqlExecutor): { executor: SqlExecutor; statements: string[] } {
+function recording(executor: SqlExecutor<'postgres'>): { executor: SqlExecutor<'postgres'>; statements: string[] } {
   const statements: string[] = [];
   const record = (tx: SqlTransaction): SqlTransaction => ({
     query: (text, params) => {

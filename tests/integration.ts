@@ -369,7 +369,7 @@ const FIRST_PARTY_TABLES = ['nest_outbox.messages', 'nest_outbox.dead_letters', 
  * `PostgresOutboxStore` as an application registers it: a factory provider that injects the database (`token`) and
  * the registry, with which the store registers itself for both contracts.
  */
-function postgresOutboxStore(token: InjectionToken, executor: (db: any) => SqlExecutor): Provider {
+function postgresOutboxStore(token: InjectionToken, executor: (db: any) => SqlExecutor<'postgres'>): Provider {
   return {
     provide: PostgresOutboxStore,
     inject: [token, OutboxStorage],
@@ -378,7 +378,7 @@ function postgresOutboxStore(token: InjectionToken, executor: (db: any) => SqlEx
 }
 
 /** Applies the store's migrations, as `npx nest-outbox migrate` does on deploy, and adds the application's tables. */
-async function prepareFirstParty(executor: SqlExecutor): Promise<void> {
+async function prepareFirstParty(executor: SqlExecutor<'postgres'>): Promise<void> {
   await new PostgresOutboxStore({ executor }).migrate();
   for (const statement of BUSINESS_TABLES) {
     await executor.query(statement);

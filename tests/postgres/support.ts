@@ -35,7 +35,7 @@ export type Isolation = 'read committed' | 'repeatable read';
 /** A database client as an application holds one. */
 export interface Client {
   name: string;
-  executor: SqlExecutor;
+  executor: SqlExecutor<'postgres'>;
   /** A transaction as the application runs one with this client: `work` gets the ORM's own transaction object. */
   transaction<T>(work: (tx: unknown) => Promise<T>, isolation?: Isolation): Promise<T>;
   /** What an application might pass by mistake instead of its transaction: the pool, the database, the client. */
