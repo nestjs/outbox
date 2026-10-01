@@ -1,6 +1,6 @@
 {
   "name": "@nestjs/outbox",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Nest - modern, fast, powerful node.js web framework (@outbox)",
   "author": "Kamil Mysliwiec",
   "license": "MIT",
