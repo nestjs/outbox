@@ -206,13 +206,15 @@ export class MySqlOutboxStore implements OutboxStore, OutboxInboxStore, OnModule
       await lockKeys(tx, this.schema, locks);
     }
 
-    // One JSON parameter per statement, whatever the batch's size (no placeholder limit), numbered in the batch's order.
+    // One JSON document per statement, whatever the batch's size, numbered in the batch's order: SqlParams.json(), which
+    // sets the payloads' fractions with CAST(? AS DOUBLE), as MySQL 8's JSON text parser can round them.
     // ERROR ON ERROR: JSON_TABLE() otherwise turns a value its column can't hold into NULL.
     for (const batch of batches(rows)) {
+      const p = new SqlParams();
       await tx.execute(
         `INSERT INTO ${this.t.messages} (id, topic, payload, headers, \`key\`, created_at, available_at, history)
 SELECT j.id, j.topic, NULLIF(j.payload, CAST('null' AS JSON)), j.headers, j.message_key, j.created_at, j.available_at, JSON_ARRAY()
-FROM JSON_TABLE(CAST(? AS JSON), '$[*]' COLUMNS (
+FROM JSON_TABLE(${p.json(batch)}, '$[*]' COLUMNS (
   n FOR ORDINALITY,
   id varchar(255) PATH '$.id' ERROR ON ERROR,
   topic varchar(255) PATH '$.topic' ERROR ON ERROR,
@@ -223,7 +225,7 @@ FROM JSON_TABLE(CAST(? AS JSON), '$[*]' COLUMNS (
   available_at bigint PATH '$.availableAt' ERROR ON ERROR
 )) AS j
 ORDER BY j.n`,
-        [JSON.stringify(batch)],
+        p.values,
       );
     }
   }

@@ -185,6 +185,8 @@ describe(`MySqlOutboxStore through ${mysql2Client.name}`, () => {
     const payload = {
       text: "O'Reilly \"quoted\" \\ ü 😀 ? $1 :name",
       numbers: [0.1 + 0.2, 1 / 3, 1e-7, 123456789.123, 2 ** 53 - 1, -0.5, 1e21],
+      // Doubles MySQL 8's JSON text parser reads 1 ulp off.
+      doubles: [0.9999999999999999, 7e-30, 0.12274816974613123, 1.2345678901234567e300, { deep: 0.49355803101514717 }],
       nested: { empty: {}, list: [], deep: [{ a: null }] },
     };
     const [full, empty] = [{ ...message('full'), payload, headers: { 'x-tenant': 'ü-7', 'X-Tenant': 'other' } }, { ...message('empty'), payload: null }];
