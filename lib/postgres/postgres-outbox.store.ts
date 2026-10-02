@@ -33,10 +33,10 @@ const READ_COMMITTED: SqlTransactionOptions = { isolationLevel: 'read committed'
 
 /**
  * The first-party `OutboxStore` and `OutboxInboxStore` on PostgreSQL, through the client the application already has
- * (`fromPg()`, `fromDrizzle()`, `fromTypeOrm()`, `fromPrisma()`, `fromKysely()`). It keeps the messages, the dead
- * letters and the consumers' inbox in a schema of its own (`nest_outbox` by default), which its migrations create and
- * bring up to date, and `add()` and `recordInbox()` write through the application's transaction, so messages and
- * inbox records commit or roll back with its rows.
+ * (`fromPg()`, `fromSequelize()`, `fromDrizzle()`, `fromTypeOrm()`, `fromPrisma()`, `fromKysely()`). It keeps the
+ * messages, the dead letters and the consumers' inbox in a schema of its own (`nest_outbox` by default), which its
+ * migrations create and bring up to date, and `add()` and `recordInbox()` write through the application's
+ * transaction, so messages and inbox records commit or roll back with its rows.
  *
  * ```ts
  * @Module({

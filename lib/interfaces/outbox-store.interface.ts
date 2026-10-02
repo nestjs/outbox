@@ -19,8 +19,8 @@ import type { Awaitable } from './awaitable.interface.js';
  * and on MySQL `MySqlOutboxStore` from `@nestjs/outbox/mysql`.
  *
  * `Tx` is your data layer's transaction handle, passed through untouched: Drizzle's `tx`, a
- * TypeORM `EntityManager`, a Prisma transaction client, a `pg` `PoolClient`. The package
- * never looks inside it.
+ * TypeORM `EntityManager`, a Prisma transaction client, a Sequelize `transaction`, a
+ * `pg` `PoolClient`. The package never looks inside it.
  *
  * Every method may return its result or a promise of it. Methods other than `add` run on
  * the store's own connection. `@nestjs/outbox/testing` exports `outboxStoreContract()`, the

@@ -8,5 +8,5 @@ export { OutboxSchemaError } from '../sql/outbox-schema.error.js';
 export type { PostgresOutboxStoreOptions } from './interfaces/index.js';
 
 // Executors: the store's SQL through the application's pool or ORM, and its transactions
-export { fromDrizzle, fromKysely, fromPg, fromPrisma, fromTypeOrm, type PrismaExecutorOptions } from '@nestjs/store-kit/postgres';
+export { fromDrizzle, fromKysely, fromPg, fromPrisma, fromSequelize, fromTypeOrm, type PrismaExecutorOptions } from '@nestjs/store-kit/postgres';
 export type { SqlExecutor, SqlIsolationLevel, SqlTransaction, SqlTransactionOptions } from '@nestjs/store-kit/postgres';

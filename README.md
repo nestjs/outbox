@@ -37,7 +37,7 @@ $ npm i --save @nestjs/outbox
 
 ## PostgreSQL store
 
-`@nestjs/outbox/postgres` ships `PostgresOutboxStore`, which keeps the messages, the dead letters and the consumers' inbox in a schema of its own (`nest_outbox`) and writes through the client your application already uses: `fromPg(pool)`, `fromDrizzle(db)`, `fromTypeOrm(dataSource)`, `fromPrisma(prisma)` or `fromKysely(db)`. Register it with a factory provider:
+`@nestjs/outbox/postgres` ships `PostgresOutboxStore`, which keeps the messages, the dead letters and the consumers' inbox in a schema of its own (`nest_outbox`) and writes through the client your application already uses: `fromPg(pool)`, `fromSequelize(sequelize)`, `fromDrizzle(db)`, `fromTypeOrm(dataSource)`, `fromPrisma(prisma)` or `fromKysely(db)`. Register it with a factory provider:
 
 ```ts
 import { OutboxStorage } from '@nestjs/outbox';
@@ -56,11 +56,11 @@ import { fromDrizzle, PostgresOutboxStore } from '@nestjs/outbox/postgres';
 export class AppModule {}
 ```
 
-`outbox.add(tx, message)` then takes your ORM's own transaction object (Drizzle's `tx`, a TypeORM `EntityManager`, a Prisma transaction client, a Kysely `Transaction`, a `pg` client after `BEGIN`). The store applies its migrations at startup, except when `NODE_ENV` is `production`; there, apply them on deploy with `npx nest-outbox migrate --url <database url>` (`status` checks, `sql` prints them for your own migration tool).
+`outbox.add(tx, message)` then takes your ORM's own transaction object (Drizzle's `tx`, a TypeORM `EntityManager`, a Prisma transaction client, a Kysely `Transaction`, a Sequelize `transaction`, a `pg` client after `BEGIN`). The store applies its migrations at startup, except when `NODE_ENV` is `production`; there, apply them on deploy with `npx nest-outbox migrate --url <database url>` (`status` checks, `sql` prints them for your own migration tool).
 
 ## MySQL store
 
-`@nestjs/outbox/mysql` ships `MySqlOutboxStore` (MySQL 8.4 LTS and 9.x), registered the same way: import it and the executor from `@nestjs/outbox/mysql` instead (`fromMysql2(pool)`, `fromDrizzle(db)`, `fromTypeOrm(dataSource)`, `fromPrisma(prisma)` with `@prisma/adapter-mariadb`, or `fromKysely(db)`). Its tables live in your connection's database, named after the `schema` option (`nest_outbox_messages`, `nest_outbox_dead_letters`, `nest_outbox_inbox`); ids, topics, keys and consumer names are compared byte for byte and hold at most 255 characters. `npx nest-outbox migrate --url mysql://...` applies its migrations, and `sql --dialect mysql` prints them (`MySqlOutboxStore.migrationStatements()` lists them one per string, for TypeORM's `queryRunner.query()`).
+`@nestjs/outbox/mysql` ships `MySqlOutboxStore` (MySQL 8.4 LTS and 9.x), registered the same way: import it and the executor from `@nestjs/outbox/mysql` instead (`fromMysql2(pool)`, `fromSequelize(sequelize)`, `fromDrizzle(db)`, `fromTypeOrm(dataSource)`, `fromPrisma(prisma)` with `@prisma/adapter-mariadb`, or `fromKysely(db)`). Its tables live in your connection's database, named after the `schema` option (`nest_outbox_messages`, `nest_outbox_dead_letters`, `nest_outbox_inbox`); ids, topics, keys and consumer names are compared byte for byte and hold at most 255 characters. `fromSequelize()` needs mysql2's `FOUND_ROWS` client flag: Sequelize's MySQL connection manager sets `flags: "-FOUND_ROWS"` unless the instance passes `dialectOptions: { flags: '' }`. `npx nest-outbox migrate --url mysql://...` applies its migrations, and `sql --dialect mysql` prints them (`MySqlOutboxStore.migrationStatements()` lists them one per string, for TypeORM's `queryRunner.query()`).
 
 ## Support
 
