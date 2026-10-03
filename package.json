@@ -79,7 +79,7 @@
     "lint-staged": "17.5.1",
     "mysql2": "3.24.5",
     "oxlint": "1.85.0",
-    "pg": "8.23.0",
+    "pg": "8.23.1",
     "prettier": "3.9.9",
     "prisma": "7.10.0",
     "reflect-metadata": "0.2.2",
