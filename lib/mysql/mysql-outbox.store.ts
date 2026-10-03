@@ -49,11 +49,11 @@ const BATCH_JSON_LENGTH = 1 << 20;
 
 /**
  * The first-party `OutboxStore` and `OutboxInboxStore` on MySQL (8.4 LTS and 9.x), through the client the application
- * already has (`fromMysql2()`, `fromDrizzle()`, `fromTypeOrm()`, `fromPrisma()`, `fromKysely()`). It keeps the
- * messages, the dead letters and the consumers' inbox in tables of its own in the connection's database
- * (`nest_outbox_messages`, `nest_outbox_dead_letters`, `nest_outbox_inbox`), which its migrations create and bring up to
- * date, and `add()` and `recordInbox()` write through the application's transaction, so messages and inbox records
- * commit or roll back with its rows.
+ * already has (`fromMysql2()`, `fromSequelize()`, `fromDrizzle()`, `fromTypeOrm()`, `fromPrisma()`,
+ * `fromKysely()`). It keeps the messages, the dead letters and the consumers' inbox in tables of its own in the
+ * connection's database (`nest_outbox_messages`, `nest_outbox_dead_letters`, `nest_outbox_inbox`), which its
+ * migrations create and bring up to date, and `add()` and `recordInbox()` write through the application's
+ * transaction, so messages and inbox records commit or roll back with its rows.
  *
  * ```ts
  * import { OutboxModule, OutboxStorage } from '@nestjs/outbox';

@@ -9,11 +9,13 @@ import type { SqlExecutor } from '@nestjs/store-kit/mysql';
  */
 export interface MySqlOutboxStoreOptions {
   /**
-   * How the store reaches the database: `fromMysql2(pool)`, `fromDrizzle(db)`, `fromTypeOrm(dataSource)`,
-   * `fromPrisma(prisma)` or `fromKysely(db)`. The store's tables live in its connections' database. Its own statements
-   * and transactions (claims, dead-letter moves) run on it, and `add()` and `recordInbox()` take that client's
-   * transaction object: Drizzle's `tx`, a TypeORM `EntityManager`, a Prisma transaction client, a Kysely `Transaction`,
-   * a mysql2 connection after `beginTransaction()`.
+   * How the store reaches the database: `fromMysql2(pool)`, `fromSequelize(sequelize)`, `fromDrizzle(db)`,
+   * `fromTypeOrm(dataSource)`, `fromPrisma(prisma)` or `fromKysely(db)`. The store's tables live in its connections'
+   * database. Its own statements and transactions (claims, dead-letter moves) run on it, and `add()` and
+   * `recordInbox()` take that client's transaction object: Drizzle's `tx`, a TypeORM `EntityManager`, a Prisma
+   * transaction client, a Kysely `Transaction`, a Sequelize `transaction`, a mysql2 connection after
+   * `beginTransaction()`. `fromSequelize()` needs mysql2's `FOUND_ROWS` client flag: Sequelize's MySQL connection
+   * manager sets `flags: "-FOUND_ROWS"` unless the instance passes `dialectOptions: { flags: '' }`.
    */
   executor: SqlExecutor<'mysql'>;
   /**
