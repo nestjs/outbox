@@ -19,3 +19,6 @@ docker-compose.yml
 
 # packed tarballs
 *.tgz
+
+# claude code (worktrees, local settings)
+.claude
