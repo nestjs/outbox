@@ -1,7 +1,11 @@
 import { Inject, Injectable, Module } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
+import v8 from 'node:v8';
+import vm from 'node:vm';
 import {
   OnOutboxMessage,
+  Outbox,
+  OutboxEvents,
   OutboxInbox,
   OutboxModule,
   OutboxRelay,
@@ -13,7 +17,7 @@ import {
 } from '../lib/index.js';
 import { uuidv7 } from '../lib/utils/uuid.util.js';
 import { inMemoryDatabase, pgliteDatabase, type TestDatabase, type TestStore } from './databases.js';
-import { registeredStore, sleep, storageWith } from './helpers.js';
+import { registeredStore, sleep, storageWith, until } from './helpers.js';
 
 /**
  * On the in-memory store (synchronous; its own transactions stand in for the application's
@@ -80,6 +84,39 @@ for (const target of targets) {
         expect(first).toMatchObject({ status: 'rejected', reason: new Error('carrier API down') });
         expect(second).toEqual({ status: 'fulfilled', value: { duplicate: false, result: 2 } });
         expect(await store.hasInbox('shipping', 'm1')).toBe(true);
+      });
+
+      it('waits with a signal that does not abort, then skips the work if the first delivery succeeded', async () => {
+        const inbox = new OutboxInbox(storageWith(store));
+        const ship = async () => {
+          await sleep(20);
+          return 'shipped';
+        };
+
+        const results = await Promise.all([
+          inbox.process('shipping', 'm1', ship),
+          inbox.process('shipping', 'm1', ship, { signal: new AbortController().signal }),
+        ]);
+
+        expect(results).toEqual([{ duplicate: false, result: 'shipped' }, { duplicate: true }]);
+      });
+
+      it('stops waiting behind a delivery that never settles when its signal aborts', async () => {
+        // The relay's retry of a publish whose handler hangs: it waited for the hung delivery
+        // forever, and so did every retry after it.
+        const inbox = new OutboxInbox(storageWith(store));
+        void inbox.process('shipping', 'm1', () => new Promise(() => {}));
+        let runs = 0;
+        const retry = new AbortController();
+        const waiting = inbox.process('shipping', 'm1', () => runs++, { signal: retry.signal });
+
+        await sleep(10);
+        retry.abort(new Error('publish timed out'));
+
+        await expect(waiting).rejects.toThrow('publish timed out');
+        const aborted = AbortSignal.abort(new Error('gave up already'));
+        await expect(inbox.process('shipping', 'm1', () => runs++, { signal: aborted })).rejects.toThrow('gave up already');
+        expect(runs).toBe(0);
       });
     });
 
@@ -298,3 +335,71 @@ describe('@OnOutboxMessage processInTransaction on an asynchronous store (e2e, D
     expect(await db.count('invoices')).toBe(1);
   });
 });
+
+describe('@OnOutboxMessage handler that never settles (e2e)', () => {
+  it("doesn't keep the message of every retry that waited behind it", async () => {
+    // Each retry waited behind the hung delivery forever, holding its own copy of the message:
+    // `retry.attempts` copies of the payload per stuck message, never released.
+    let calls = 0;
+
+    @Injectable()
+    class StuckHandlers {
+      @OnOutboxMessage('order.placed', { consumer: 'billing' })
+      bill() {
+        calls++;
+        return new Promise(() => {}); // a downstream call without a timeout, ignoring its signal
+      }
+    }
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        OutboxModule.forRoot({
+          relay: { pollInterval: 10, lease: 300, publishTimeout: 30 },
+          retry: { attempts: 5, backoff: () => 0 },
+        }),
+      ],
+      providers: [StuckHandlers],
+    }).compile();
+    moduleRef.useLogger(false);
+
+    // Each claim hands the relay a copy of the message: count the copies still reachable.
+    let attempts = 0;
+    let collected = 0;
+    const copies = new FinalizationRegistry(() => collected++);
+    let deadLettered = false;
+    moduleRef.get(OutboxEvents).events$.subscribe((event) => {
+      if (event.type === 'retry-scheduled' || event.type === 'dead-lettered') {
+        copies.register(event.message, null);
+        attempts++;
+      }
+      deadLettered ||= event.type === 'dead-lettered';
+    });
+
+    try {
+      await moduleRef.init();
+      await moduleRef.get(Outbox).add({}, { topic: 'order.placed', payload: {} });
+      await until(() => deadLettered);
+      await collectGarbage();
+
+      expect(calls).toBe(1);
+      expect(attempts).toBe(5);
+      expect(attempts - collected).toBe(1); // the hung delivery's own, while its handler runs
+    } finally {
+      await moduleRef.close();
+    }
+  });
+});
+
+/**
+ * Full collections, with turns in between for `FinalizationRegistry` callbacks. Vitest's workers
+ * start without `--expose-gc`, so the flag is set here. (A `WeakRef` wouldn't do to observe the
+ * collection: creating one keeps its target alive for the rest of the job.)
+ */
+async function collectGarbage() {
+  v8.setFlagsFromString('--expose_gc');
+  const gc = vm.runInNewContext('gc') as () => void;
+  for (let i = 0; i < 5; i++) {
+    gc();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
