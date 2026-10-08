@@ -1,7 +1,5 @@
 import { Inject, Injectable, Module } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
-import v8 from 'node:v8';
-import vm from 'node:vm';
 import {
   OnOutboxMessage,
   Outbox,
@@ -17,7 +15,7 @@ import {
 } from '../lib/index.js';
 import { uuidv7 } from '../lib/utils/uuid.util.js';
 import { inMemoryDatabase, pgliteDatabase, type TestDatabase, type TestStore } from './databases.js';
-import { registeredStore, sleep, storageWith, until } from './helpers.js';
+import { collectGarbage, registeredStore, sleep, storageWith, until } from './helpers.js';
 
 /**
  * On the in-memory store (synchronous; its own transactions stand in for the application's
@@ -389,17 +387,3 @@ describe('@OnOutboxMessage handler that never settles (e2e)', () => {
     }
   });
 });
-
-/**
- * Full collections, with turns in between for `FinalizationRegistry` callbacks. Vitest's workers
- * start without `--expose-gc`, so the flag is set here. (A `WeakRef` wouldn't do to observe the
- * collection: creating one keeps its target alive for the rest of the job.)
- */
-async function collectGarbage() {
-  v8.setFlagsFromString('--expose_gc');
-  const gc = vm.runInNewContext('gc') as () => void;
-  for (let i = 0; i < 5; i++) {
-    gc();
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-}

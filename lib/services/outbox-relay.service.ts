@@ -522,16 +522,25 @@ async function publishWithin(transport: OutboxTransport, message: OutboxMessage,
     await Promise.race([
       Promise.resolve().then(() => transport.publish(message, { signal: controller.signal })),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          const error = new OutboxPublishTimeoutError(ms);
-          controller.abort(error);
-          reject(error);
-        }, ms);
+        timer = setTimeout(abortOnTimeout, ms, controller, reject, ms);
       }),
     ]);
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * The timeout of `publishWithin()`, at module level on purpose: an Error keeps its stack frames,
+ * with each frame's closure, until `.stack` is read. A callback declared in `publishWithin()` would
+ * share its scope (the V8 Context) with the `transport.publish(message, ...)` arrow, so the error,
+ * which is also the signal's `reason`, would keep the message and its payload alive for as long
+ * as anything holds the signal.
+ */
+function abortOnTimeout(controller: AbortController, reject: (error: Error) => void, ms: number) {
+  const error = new OutboxPublishTimeoutError(ms);
+  controller.abort(error);
+  reject(error);
 }
 
 function positiveMs(value: Duration, option: string): number {

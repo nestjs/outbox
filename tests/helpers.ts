@@ -1,3 +1,5 @@
+import v8 from 'node:v8';
+import vm from 'node:vm';
 import { Module, type DynamicModule, type LoggerService } from '@nestjs/common';
 import { OutboxStorage, type OutboxInboxStore, type OutboxMessage, type OutboxStore } from '../lib/index.js';
 import { uuidv7 } from '../lib/utils/uuid.util.js';
@@ -24,6 +26,20 @@ export async function until(check: () => boolean | Promise<boolean>, timeout = 3
       throw new Error('Timed out waiting');
     }
     await sleep(5);
+  }
+}
+
+/**
+ * Full collections, with turns in between for `FinalizationRegistry` callbacks. Vitest's workers
+ * start without `--expose-gc`, so the flag is set here. (A `WeakRef` wouldn't do to observe the
+ * collection: creating one keeps its target alive for the rest of the job.)
+ */
+export async function collectGarbage() {
+  v8.setFlagsFromString('--expose_gc');
+  const gc = vm.runInNewContext('gc') as () => void;
+  for (let i = 0; i < 5; i++) {
+    gc();
+    await new Promise((resolve) => setImmediate(resolve));
   }
 }
 

@@ -12,7 +12,7 @@ import {
 } from '../lib/index.js';
 import { uuidv7 } from '../lib/utils/uuid.util.js';
 import { crashable, inMemoryDatabase, pgliteDatabase, postgresDatabase, type TestDatabase } from './databases.js';
-import { silentLogger, sleep, until } from './helpers.js';
+import { collectGarbage, silentLogger, sleep, until } from './helpers.js';
 
 const { postgres, reason } = await startPostgres();
 afterAll(() => postgres?.stop());
@@ -229,6 +229,29 @@ for (const target of targets) {
       expect(signal!.aborted).toBe(true);
       expect(signal!.reason).toBeInstanceOf(OutboxPublishTimeoutError);
       expect(signal!.reason).toMatchObject({ timeoutMs: 20 });
+    });
+
+    it("doesn't keep the message alive through the signal of a publish that timed out", async () => {
+      await produce(1);
+      const signals: AbortSignal[] = [];
+      let collected = false;
+      const registry = new FinalizationRegistry(() => (collected = true));
+      const r = relay(
+        openStore(),
+        {
+          publish: (message, { signal }) => {
+            registry.register(message, undefined);
+            signals.push(signal); // a handler or transport that holds on to the signal
+            return new Promise(() => {});
+          },
+        },
+        { lease: '10s', publishTimeout: 20 },
+      );
+
+      expect(await r.runOnce()).toMatchObject({ retried: 1 });
+      expect(signals[0]!.reason).toBeInstanceOf(OutboxPublishTimeoutError);
+      await collectGarbage();
+      expect(collected).toBe(true);
     });
 
     it('polls on its own and publishes immediately when notified', async () => {
