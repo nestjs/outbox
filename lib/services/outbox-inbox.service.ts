@@ -26,7 +26,9 @@ export class OutboxInbox {
    *
    * A second delivery of the same message to the same consumer that arrives while the
    * first is still running in this process waits for it, then skips `work` if the first
-   * succeeded. Across processes, and after a crash (or a failed record) between `work`
+   * succeeded. With a `signal`, that wait ends when it aborts, rejecting with its reason:
+   * a first delivery that never settles doesn't hold every redelivery (and its message)
+   * forever. Across processes, and after a crash (or a failed record) between `work`
    * and the record, `work` can run twice. Use `processInTransaction()` when the side
    * effects live in the same database.
    */
@@ -34,10 +36,11 @@ export class OutboxInbox {
     consumer: string,
     messageId: string,
     work: () => T | Promise<T>,
+    { signal }: { signal?: AbortSignal } = {},
   ): Promise<OutboxInboxResult<Awaited<T>>> {
     const key = `${consumer}\u0000${messageId}`;
     for (let earlier = this.running.get(key); earlier; earlier = this.running.get(key)) {
-      await earlier.then(noop, noop);
+      await settledOrAborted(earlier, signal);
     }
 
     const delivery = this.checkRunRecord(consumer, messageId, work);
@@ -99,6 +102,43 @@ export class OutboxInbox {
 }
 
 const noop = () => {};
+
+interface Waiter {
+  wake?: () => void;
+}
+
+/** Waits for `promise` to settle, or rejects with `signal`'s reason when it aborts first. */
+function settledOrAborted(promise: Promise<unknown>, signal: AbortSignal | undefined): Promise<void> {
+  if (!signal) {
+    return promise.then(noop, noop);
+  }
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
+
+  const waiter: Waiter = {};
+  wakeWhenSettled(promise, waiter);
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      waiter.wake = undefined;
+      reject(signal.reason);
+    };
+    waiter.wake = () => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    };
+    signal.addEventListener('abort', abort, { once: true });
+  });
+}
+
+/**
+ * Wakes `waiter` when `promise` settles. A function of its own, so the reaction left on a
+ * promise that never settles holds `waiter` alone (emptied on abort): never the signal, whose
+ * reason's unformatted stack keeps the relay's closures, and their message, alive.
+ */
+function wakeWhenSettled(promise: Promise<unknown>, waiter: Waiter) {
+  promise.then(noop, noop).then(() => waiter.wake?.());
+}
 
 function runIfFirst<T>(first: boolean, work: () => T): Awaitable<OutboxInboxResult<Awaited<T>>> {
   if (typeof first !== 'boolean') {

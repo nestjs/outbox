@@ -171,7 +171,7 @@ export class OutboxDispatcher extends OutboxTransport implements OnModuleInit {
     };
 
     if (entry.inbox) {
-      await this.inbox.process(entry.consumer, message.id, invoke);
+      await this.inbox.process(entry.consumer, message.id, invoke, { signal });
       return;
     }
     await invoke();
