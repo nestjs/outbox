@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { OutboxStorage } from '../../lib/index.js';
 import { PostgresOutboxStore, type SqlExecutor, type SqlTransaction } from '../../lib/postgres/index.js';
+import { describeError } from '../../lib/utils/describe-error.util.js';
 import { silentLogger } from '../helpers.js';
 import { message, openPglite, pgClient, testDatabase, truncate, type Client } from './support.js';
 
@@ -118,6 +119,31 @@ describe.each(targets)('PostgresOutboxStore through $name', ({ open, skip }) => 
 
     expect(await store.purgeDeadLetters({ failedBefore: 20 })).toBe(0);
     expect(await store.purgeDeadLetters({ failedBefore: 20.1 })).toBe(1);
+  });
+
+  it('stores the description of an error whose text a column would refuse, to retry and to dead-letter', async () => {
+    const m = message('m');
+    await client.transaction((tx) => store.add(tx, [m]));
+    await claimAll('r1');
+    // Real V8 text: its message holds the first half of the emoji.
+    const jsonParseError = (() => {
+      try {
+        return JSON.parse('😀 not json');
+      } catch (error) {
+        return error;
+      }
+    })();
+    const thrown = [new Error('a\u0000b'), new Error(`${'a'.repeat(1_992)}😀`), jsonParseError];
+
+    for (const [index, error] of thrown.entries()) {
+      const record = { attempt: index + 1, at: 20, error: describeError(error) };
+      expect(await store.reschedule(m.id, 'r1', { attempts: index + 1, availableAt: 20, error: record })).toBe(true);
+      await store.claim({ owner: 'r1', now: 20, leaseMs: 1_000, limit: 10 });
+    }
+
+    const last = { attempt: 4, at: 30, error: describeError(jsonParseError) };
+    expect(await store.deadLetter(m.id, 'r1', { attempts: 4, reason: 'exhausted', failedAt: 30, error: last })).toBe(true);
+    expect(await store.stats(30)).toMatchObject({ pending: 0, deadLetters: 1 });
   });
 
   it('refuses to requeue a dead letter whose id a pending message has, moving nothing', async () => {

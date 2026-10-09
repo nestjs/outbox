@@ -111,6 +111,43 @@ describe('helpers', () => {
     expect(describeError(new Error('x'.repeat(5_000))).length).toBeLessThanOrEqual(2_001);
   });
 
+  describe('describeError on text a database refuses', () => {
+    const thrownByJsonParse = (): unknown => {
+      try {
+        JSON.parse('😀 not json');
+      } catch (error) {
+        return error;
+      }
+      throw new Error('JSON.parse accepted the text');
+    };
+
+    it('replaces U+0000, in an error, a thrown string and the errors of an aggregate', () => {
+      expect(describeError(new Error('a\u0000b\u0000c'))).toBe('Error: a\uFFFDb\uFFFDc'); // every one
+      expect(describeError('a\u0000b')).toBe('a\uFFFDb');
+      expect(describeError(new AggregateError([new Error('x\u0000y')], 'z'))).toBe('AggregateError: z [Error: x\uFFFDy]');
+    });
+
+    it('returns well-formed text when the cut splits a surrogate pair', () => {
+      const text = describeError(new Error(`${'a'.repeat(1_992)}😀`)); // the pair sits at 1999-2000
+      expect(text.isWellFormed()).toBe(true);
+      expect(text).toHaveLength(2_001);
+      expect(text.endsWith('\uFFFD…')).toBe(true);
+    });
+
+    it('returns well-formed text for the lone surrogate in the message of a JSON.parse error', () => {
+      const thrown = thrownByJsonParse();
+      expect(thrown).toBeInstanceOf(SyntaxError);
+      expect((thrown as SyntaxError).message.isWellFormed()).toBe(false); // the V8 message itself
+      expect(describeError(thrown).isWellFormed()).toBe(true);
+    });
+
+    it('keeps the text and the cut of an error it can store', () => {
+      expect(describeError(new Error('😀 ok'))).toBe('Error: 😀 ok');
+      expect(describeError(new Error('a'.repeat(1_993)))).toBe(`Error: ${'a'.repeat(1_993)}`);
+      expect(describeError(new Error('a'.repeat(5_000)))).toBe(`Error: ${'a'.repeat(1_993)}…`);
+    });
+  });
+
   it('gives the errors an app may catch a common base, and keeps its own signal apart', () => {
     for (const error of [
       new OutboxTransactionRequiredError(),
