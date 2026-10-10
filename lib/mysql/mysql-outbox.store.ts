@@ -206,16 +206,22 @@ export class MySqlOutboxStore implements OutboxStore, OutboxInboxStore, OnModule
       await lockKeys(tx, this.schema, locks);
     }
 
-    // One JSON document per statement, whatever the batch's size, numbered in the batch's order: SqlParams.json(), which
-    // sets the payloads' fractions with CAST(? AS DOUBLE), as MySQL 8's JSON text parser can round them.
+    // One JSON document of the messages per statement, whatever the batch's size, in the batch's order: SqlParams.json(),
+    // which sets the payloads' fractions with CAST(? AS DOUBLE), as MySQL 8's JSON text parser can round them.
     // ERROR ON ERROR: JSON_TABLE() otherwise turns a value its column can't hold into NULL.
+    // The rows are numbered by a light JSON_TABLE() over a JSON array with one `null` per message, and each message is read
+    // from the document by its number. Ordering the messages themselves sorted the rows in a buffer of 256 KB by default
+    // (`sort_buffer_size`), which fails ("Out of sort memory") for one of that size. The outer ORDER BY keeps `seq` in the
+    // batch order. `d` parses the document once: JSON_EXTRACT(CAST(? AS JSON), ...) in the lateral table would parse it
+    // for each row.
     for (const batch of batches(rows)) {
       const p = new SqlParams();
       await tx.execute(
         `INSERT INTO ${this.t.messages} (id, topic, payload, headers, \`key\`, created_at, available_at, history)
 SELECT j.id, j.topic, NULLIF(j.payload, CAST('null' AS JSON)), j.headers, j.message_key, j.created_at, j.available_at, JSON_ARRAY()
-FROM JSON_TABLE(${p.json(batch)}, '$[*]' COLUMNS (
-  n FOR ORDINALITY,
+FROM (SELECT n FROM JSON_TABLE(${p.json(batch.map(() => null))}, '$[*]' COLUMNS (n FOR ORDINALITY)) AS x) AS o
+CROSS JOIN (SELECT ${p.json(batch)} AS doc) AS d
+CROSS JOIN JSON_TABLE(JSON_EXTRACT(d.doc, CONCAT('$[', o.n - 1, ']')), '$' COLUMNS (
   id varchar(255) PATH '$.id' ERROR ON ERROR,
   topic varchar(255) PATH '$.topic' ERROR ON ERROR,
   payload json PATH '$.payload' ERROR ON ERROR,
@@ -224,7 +230,7 @@ FROM JSON_TABLE(${p.json(batch)}, '$[*]' COLUMNS (
   created_at bigint PATH '$.createdAt' ERROR ON ERROR,
   available_at bigint PATH '$.availableAt' ERROR ON ERROR
 )) AS j
-ORDER BY j.n`,
+ORDER BY o.n`,
         p.values,
       );
     }

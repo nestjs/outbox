@@ -1,15 +1,15 @@
 /**
- * What MySqlOutboxStore does beyond the contract, on MySQL: a large batch in a few statements of one JSON parameter each,
- * lock rows for keyed messages only, times with a fraction of a millisecond, the inputs a column would refuse (a key,
- * id, topic, consumer or owner longer than its column fails clearly, before any statement: in `OutboxInbox.process()`,
- * before the handler runs), keys, ids, topics and
+ * What MySqlOutboxStore does beyond the contract, on MySQL: a large batch in a few statements of one JSON document each,
+ * lock rows for keyed messages only, a message larger than the sort buffer, times with a fraction of a millisecond, the
+ * inputs a column would refuse (a key, id, topic, consumer or owner longer than its column fails clearly, before any
+ * statement: in `OutboxInbox.process()`, before the handler runs), keys, ids, topics and
  * consumers that differ only in case, accents or a trailing space kept apart, payloads round-tripping, each value bound to
  * its own placeholder (MySQL binds `?` by position), a requeue that meets a pending message with the same id, dead
  * letters of one moment in byte order, `stats()` and a claim on a key of 20,000 messages, and registering itself for
  * both contracts.
  */
 import { randomUUID } from 'node:crypto';
-import { OutboxInbox, OutboxStorage } from '../../lib/index.js';
+import { OutboxInbox, OutboxStorage, type OutboxMessage } from '../../lib/index.js';
 import { MySqlOutboxStore } from '../../lib/mysql/index.js';
 import { silentLogger } from '../helpers.js';
 import { message, mysql2Client, onMysql, recording, rows, testDatabase, truncate, type Client } from './support.js';
@@ -46,14 +46,56 @@ describe(`MySqlOutboxStore through ${mysql2Client.name}`, () => {
   const inserts = () => recorder.statements.filter(({ text }) => text.startsWith('INSERT INTO `nest_outbox_messages`'));
   const locks = () => recorder.statements.filter(({ text }) => text.includes('`nest_outbox_locks`'));
 
-  it('adds a batch of 12,000 messages in a few statements of one JSON parameter each, in the batch order', async () => {
+  it('adds a batch of 12,000 messages in a few statements of two JSON parameters each, in the batch order', async () => {
     const batch = Array.from({ length: 12_000 }, (_, i) => message(`m${i}`));
     await client.transaction((tx) => store.add(tx, batch));
 
     expect(inserts().length).toBeGreaterThan(1);
     expect(inserts().length).toBeLessThanOrEqual(3);
-    expect(inserts().every(({ params }) => params?.length === 1)).toBe(true);
+    expect(inserts().every(({ params }) => params?.length === 2)).toBe(true);
     expect((await claimAll()).map((m) => m.topic)).toEqual(batch.map((m) => m.topic));
+  });
+
+  describe('a message whose JSON is larger than the sort buffer (262,144 bytes by default)', () => {
+    // Well over the 256 KB buffer MySQL sorts a statement's rows in: a row of this size can't be held by that sort.
+    const large = 'x'.repeat(1_000_000);
+    const medium = 'y'.repeat(400_000);
+    const small = (n: number) => Array.from({ length: n }, (_, i) => message(`small-${i}`));
+    const topics = (messages: readonly { topic: string }[]) => messages.map((m) => m.topic);
+
+    it('stores a payload of about 1 MB', async () => {
+      const big = { ...message('big'), payload: { text: large } };
+      await client.transaction((tx) => store.add(tx, [big]));
+      expect(await claimAll()).toEqual([big]);
+    });
+
+    it('stores headers of about 400 KB', async () => {
+      const big = { ...message('big'), headers: { 'x-context': medium } };
+      await client.transaction((tx) => store.add(tx, [big]));
+      expect(await claimAll()).toEqual([big]);
+    });
+
+    it.each([
+      ['first', (big: OutboxMessage, rest: OutboxMessage[]) => [big, ...rest]],
+      ['last', (big: OutboxMessage, rest: OutboxMessage[]) => [...rest, big]],
+    ])('stores a large message with small ones, the large one %s, in the batch order', async (_, arrange) => {
+      const batch = arrange({ ...message('big'), payload: { text: medium } }, small(50));
+      await client.transaction((tx) => store.add(tx, batch));
+      expect(topics(await claimAll())).toEqual(topics(batch));
+    });
+
+    it('stores two large messages in the batch order', async () => {
+      const batch = [{ ...message('first'), payload: { text: medium } }, ...small(3), { ...message('last'), payload: { text: medium } }];
+      await client.transaction((tx) => store.add(tx, batch));
+      expect(topics(await claimAll())).toEqual(topics(batch));
+    });
+
+    it('keeps the order of a key whose messages are large', async () => {
+      const keyed = (topic: string) => ({ ...message(topic, 'K'), payload: { text: medium } });
+      const batch = [keyed('a'), ...small(2), keyed('b'), message('other', 'L'), keyed('c')];
+      await client.transaction((tx) => store.add(tx, batch));
+      expect(topics(await claimAll())).toEqual(topics(batch));
+    });
   });
 
   it("locks the keys' buckets in two statements, and takes no lock for messages without a key", async () => {
