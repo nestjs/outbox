@@ -1,9 +1,14 @@
 const MAX_ERROR_LENGTH = 2_000;
 
-/** A compact, storable description of whatever was thrown. Never throws. */
+/**
+ * A compact, storable description of whatever was thrown. Never throws.
+ * The text has no U+0000 and no lone surrogate. PostgreSQL refuses both in `jsonb`, and U+0000 in `text`.
+ */
 export function describeError(error: unknown): string {
-  const text = describe(error);
-  return text.length > MAX_ERROR_LENGTH ? `${text.slice(0, MAX_ERROR_LENGTH)}…` : text;
+  const text = describe(error).replaceAll('\u0000', '\uFFFD');
+  const cut = text.length > MAX_ERROR_LENGTH ? `${text.slice(0, MAX_ERROR_LENGTH)}…` : text;
+  // Last, because the cut can split a surrogate pair.
+  return cut.toWellFormed();
 }
 
 function describe(error: unknown): string {

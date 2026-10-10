@@ -9,7 +9,7 @@
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
     "target": "ES2021",
-    "lib": ["ES2023"],
+    "lib": ["ES2023", "ES2024.String"],
     "sourceMap": false,
     "outDir": "./dist",
     "rootDir": ".",
