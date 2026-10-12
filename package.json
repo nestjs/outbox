@@ -61,7 +61,7 @@
     "@electric-sql/pglite": "0.5.8",
     "@nestjs/common": "12.1.2",
     "@nestjs/core": "12.1.2",
-    "@nestjs/drizzle": "0.0.1",
+    "@nestjs/drizzle": "0.0.2",
     "@nestjs/microservices": "12.1.2",
     "@nestjs/platform-express": "12.1.2",
     "@nestjs/platform-fastify": "12.1.2",
