@@ -69,7 +69,7 @@
     "@nestjs/typeorm": "12.0.2",
     "@prisma/adapter-mariadb": "7.10.1",
     "@prisma/adapter-pg": "7.10.1",
-    "@prisma/client": "7.10.0",
+    "@prisma/client": "7.10.1",
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
     "@types/supertest": "7.2.1",
