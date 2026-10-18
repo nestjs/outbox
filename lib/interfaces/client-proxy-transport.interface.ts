@@ -28,6 +28,14 @@ export interface ClientProxyTransportOptions {
    * `OutboxEnvelope` (the second argument) as data. Return a transport record
    * (`RmqRecord`, `NatsRecord`, a Kafka `{ key, value, headers }`) as `data` to use
    * broker headers and keys.
+   *
+   * Through a `ClientKafka`, the default is `toKafkaRecord` instead: a record under the
+   * message's key and headers, with the envelope as its value. The client's default
+   * serializer sends any data that has a `key` or a `value` as the record itself, and the
+   * envelope has a `key`, so with that serializer `data` must never be the envelope or a
+   * spread of it: it goes out as a record with a null value. A `ClientKafka` with its own
+   * `serializer` gets the record as `data` as well; one that expects the envelope keeps it
+   * with `toPacket: (message, envelope) => ({ pattern: message.topic, data: envelope })`.
    */
   toPacket?: (message: OutboxMessage, envelope: OutboxEnvelope) => { pattern: unknown; data: unknown };
 }
