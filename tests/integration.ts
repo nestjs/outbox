@@ -22,7 +22,7 @@
  * with the reason) and MySQL (`SQL_TEST_MYSQL_URL`, else skipped with the reason) every
  * application instance opens a pool of its own, so instances race over real connections (two
  * connections each on MySQL, a shared server). Each database is migrated with the recipe's own
- * migrations (the first-party store's, as `npx nest-outbox migrate` applies them on deploy) and
+ * migrations (the first-party store's, as `npx @nestjs/outbox migrate` applies them on deploy) and
  * gets two business tables of the application's, `it_orders` and `it_invoices`, written in the
  * same transactions as the outbox and the inbox.
  */
@@ -377,7 +377,7 @@ function postgresOutboxStore(token: InjectionToken, executor: (db: any) => SqlEx
   };
 }
 
-/** Applies the store's migrations, as `npx nest-outbox migrate` does on deploy, and adds the application's tables. */
+/** Applies the store's migrations, as `npx @nestjs/outbox migrate` does on deploy, and adds the application's tables. */
 async function prepareFirstParty(executor: SqlExecutor<'postgres'>): Promise<void> {
   await new PostgresOutboxStore({ executor }).migrate();
   for (const statement of BUSINESS_TABLES) {
@@ -518,7 +518,7 @@ function mysqlOutboxStore(token: InjectionToken, executor: (db: any) => mysqlSto
 }
 
 /**
- * A MySQL database of this process for a recipe: the store's migrations applied, as `npx nest-outbox migrate` does on
+ * A MySQL database of this process for a recipe: the store's migrations applied, as `npx @nestjs/outbox migrate` does on
  * deploy, and the application's tables; a pool of one connection to look at it from outside.
  */
 async function mysqlDatabase(server: TestMysql, name: string, module: (url: string) => Promise<() => DynamicModule>): Promise<RecipeDatabase> {

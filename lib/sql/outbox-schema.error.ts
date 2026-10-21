@@ -13,7 +13,7 @@ import { OutboxError } from '../errors/outbox.error.js';
  *   await app.init();
  * } catch (error) {
  *   if (error instanceof OutboxSchemaError) {
- *     console.error(`Schema "${error.schema}" is at version ${error.version}; run npx nest-outbox migrate`);
+ *     console.error(`Schema "${error.schema}" is at version ${error.version}; run npx @nestjs/outbox migrate`);
  *   }
  *   throw error;
  * }
