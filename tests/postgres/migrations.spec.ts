@@ -217,7 +217,7 @@ describe('a schema behind the code', () => {
     expect(error).toMatchObject({ name: 'OutboxSchemaError', schema: 'm_behind', version: 0, requiredVersion: 1 });
     expect((error as Error).message).toBe(
       'PostgresOutboxStore: schema "m_behind" is at version 0, and this version of @nestjs/outbox needs version 1. Apply its migrations: ' +
-        'set `migrate: true` to apply them at startup, run `npx nest-outbox migrate --url <database url> --schema m_behind`, ' +
+        'set `migrate: true` to apply them at startup, run `npx @nestjs/outbox migrate --url <database url> --schema m_behind`, ' +
         "or apply `PostgresOutboxStore.migrationSql({ schema: 'm_behind', from: 0 })` with your migration tool.",
     );
     await expect(behind.stats(1)).rejects.toThrow(OutboxSchemaError);

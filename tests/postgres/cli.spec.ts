@@ -39,7 +39,7 @@ describe('nest-outbox', () => {
   it('prints its usage for --help, and on stderr, exiting with 1, for no command, an unknown one or an unknown option', async () => {
     const help = await run(['--help']);
     expect(help).toMatchObject({ code: 0, err: '' });
-    expect(help.out).toMatch(/^Usage: nest-outbox <command> \[options\]/);
+    expect(help.out).toMatch(/^Usage: npx @nestjs\/outbox <command> \[options\]/);
     expect(help.out).toContain("\n\nPostgresOutboxStore's schema (@nestjs/outbox/postgres) or MySqlOutboxStore's (@nestjs/outbox/mysql):\n\n  migrate   ");
     expect(help.out).toContain('Default: nest_outbox');
     expect(await run([])).toEqual({ code: 1, out: '', err: help.out });
@@ -48,12 +48,12 @@ describe('nest-outbox', () => {
   });
 
   it("needs the database for migrate and status: --url, else DATABASE_URL, of a dialect it serves (never echoing the URL)", async () => {
-    expect(await run(['migrate'])).toEqual({ code: 1, out: '', err: 'nest-outbox migrate needs the database: pass --url, or set DATABASE_URL.\n' });
-    expect((await run(['status'])).err).toBe('nest-outbox status needs the database: pass --url, or set DATABASE_URL.\n');
+    expect(await run(['migrate'])).toEqual({ code: 1, out: '', err: 'npx @nestjs/outbox migrate needs the database: pass --url, or set DATABASE_URL.\n' });
+    expect((await run(['status'])).err).toBe('npx @nestjs/outbox status needs the database: pass --url, or set DATABASE_URL.\n');
     expect(await run(['status', '--url', 'sqlite://secret.db'])).toEqual({
       code: 1,
       out: '',
-      err: 'nest-outbox status takes a database URL that starts with postgres:// or postgresql:// or mysql://.\n',
+      err: 'npx @nestjs/outbox status takes a database URL that starts with postgres:// or postgresql:// or mysql://.\n',
     });
   });
 
