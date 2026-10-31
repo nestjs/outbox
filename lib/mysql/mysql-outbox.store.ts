@@ -222,13 +222,14 @@ export class MySqlOutboxStore implements OutboxStore, OutboxInboxStore, OnModule
     // The rows are numbered by a light JSON_TABLE() over a JSON array with one `null` per message, and each message is read
     // from the document by its number. Ordering the messages themselves sorted the rows in a buffer of 256 KB by default
     // (`sort_buffer_size`), which fails ("Out of sort memory") for one of that size. The outer ORDER BY keeps `seq` in the
-    // batch order. `d` parses the document once: JSON_EXTRACT(CAST(? AS JSON), ...) in the lateral table would parse it
-    // for each row.
+    // batch order. `d` parses the document once: SqlParams.json()'s JSON_EXTRACT(?, '$') in the lateral table would parse
+    // it for each row. A `null` payload's JSON null becomes SQL NULL against JSON_EXTRACT('null', '$'): MariaDB has no
+    // JSON cast.
     for (const batch of batches(rows)) {
       const p = new SqlParams();
       await tx.execute(
         `INSERT INTO ${this.t.messages} (id, topic, payload, headers, \`key\`, created_at, available_at, history)
-SELECT j.id, j.topic, NULLIF(j.payload, CAST('null' AS JSON)), j.headers, j.message_key, j.created_at, j.available_at, JSON_ARRAY()
+SELECT j.id, j.topic, NULLIF(j.payload, JSON_EXTRACT('null', '$')), j.headers, j.message_key, j.created_at, j.available_at, JSON_ARRAY()
 FROM (SELECT n FROM JSON_TABLE(${p.json(batch.map(() => null))}, '$[*]' COLUMNS (n FOR ORDINALITY)) AS x) AS o
 CROSS JOIN (SELECT ${p.json(batch)} AS doc) AS d
 CROSS JOIN JSON_TABLE(JSON_EXTRACT(d.doc, CONCAT('$[', o.n - 1, ']')), '$' COLUMNS (
@@ -272,7 +273,8 @@ ORDER BY o.n`,
       // sorted would lock every claimable row, and a prepared statement's plan can differ). The subquery reads the key's
       // messages from its oldest, and stops at the first that is delayed or leased, or at the row itself: a probe as
       // long as the row's place in its key (MySQL doesn't bound an index range by the outer row's `seq`: a
-      // `seq < m.seq` condition would read the whole key).
+      // `seq < m.seq` condition would read the whole key). The locking clause locks `m`'s rows only: a locking read
+      // doesn't lock the rows its subqueries read (`FOR UPDATE OF m` says the same, in a spelling MariaDB doesn't take).
       const p = new SqlParams();
       const due = await tx.query<Row>(
         `SELECT CAST(m.seq AS CHAR) AS seq, ${columns(MESSAGE_COLUMNS, 'm')}
@@ -286,7 +288,7 @@ WHERE m.available_at <= ${p.bigint(at)} AND (m.lease_until IS NULL OR m.lease_un
   ) = m.seq)
 ORDER BY m.seq
 LIMIT ${p.limit(limit)}
-FOR UPDATE OF m SKIP LOCKED`,
+FOR UPDATE SKIP LOCKED`,
         p.values,
       );
       if (due.length === 0) {
@@ -306,9 +308,13 @@ FOR UPDATE OF m SKIP LOCKED`,
         return true;
       });
       if (taken.length > 0) {
+        // The index is pinned: `seq IN (...)` of most of a small table plans as a scan of the whole key, which waits
+        // behind every row another transaction holds where the server doesn't pass over them (MariaDB with
+        // innodb_snapshot_isolation on, its default since 11.6.2, makes no semi-consistent reads). A range of the
+        // primary key reads the rows taken, and no others.
         const u = new SqlParams();
         await tx.execute(
-          `UPDATE ${this.t.messages} SET lease_owner = ${u.text(owner)}, lease_until = ${u.bigint(until)}
+          `UPDATE ${this.t.messages} FORCE INDEX (PRIMARY) SET lease_owner = ${u.text(owner)}, lease_until = ${u.bigint(until)}
 WHERE seq IN (${taken.map((row) => `CAST(${u.text(row.seq)} AS SIGNED)`).join(', ')})`,
           u.values,
         );
@@ -522,7 +528,8 @@ FROM ${this.t.deadLetters} d WHERE ${i.in('d.id', chunk)} ORDER BY d.seq`,
     await this.ready();
     return retryOnDeadlock(this.executor, async (tx) => {
       const p = new SqlParams();
-      const { affectedRows } = await tx.execute(`DELETE FROM ${this.t.deadLetters} AS d WHERE ${this.deadLetterWhere(p, conditions)}`, p.values);
+      // The multi-table form: MariaDB takes an alias in a single-table DELETE only from 11.6.
+      const { affectedRows } = await tx.execute(`DELETE d FROM ${this.t.deadLetters} AS d WHERE ${this.deadLetterWhere(p, conditions)}`, p.values);
       return affectedRows;
     });
   }

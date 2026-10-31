@@ -14,6 +14,8 @@ import mysql from 'mysql2/promise';
 import { databasePrefix } from './postgres.js';
 
 export interface TestMysql {
+  /** Whether the server is MariaDB rather than MySQL, for the tests of what only one of them does. */
+  readonly mariadb: boolean;
   /** The URL of one of this helper's databases. */
   url(database: string): string;
   /** Creates a database of this process (`<databasePrefix><name>_<pid>_<random>`) and returns its name and URL. */
@@ -30,9 +32,11 @@ export async function startMysql(): Promise<TestMysqlResult> {
     return { mysql: null, reason: 'SQL_TEST_MYSQL_URL is not set' };
   }
 
+  let mariadb: boolean;
   try {
-    await withConnection(connectionString, async (connection) => {
-      await connection.query('SELECT 1');
+    mariadb = await withConnection(connectionString, async (connection) => {
+      const [rows] = await connection.query<mysql.RowDataPacket[]>('SELECT VERSION() AS version');
+      return /mariadb/i.test(String(rows[0]?.version));
     });
   } catch (error) {
     // The URL may hold a password: only the error's message goes into the reason.
@@ -49,6 +53,7 @@ export async function startMysql(): Promise<TestMysqlResult> {
   };
   return {
     mysql: {
+      mariadb,
       url,
       async createDatabase(name) {
         await (swept ??= sweepStaleMysqlDatabases(connectionString));

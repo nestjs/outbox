@@ -99,3 +99,38 @@ jobs:
         # MySqlOutboxStore's contracts through every executor, migrations, races and the command line, and the
         # integration suites on its recipes.
         run: npx vitest run --project outbox:mysql-store
+
+  e2e-mariadb:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The LTS lines MySqlOutboxStore supports on MariaDB (utf8mb4_0900_bin is 11.4's). 11.8 also has
+        # innodb_snapshot_isolation on by default, which 11.4 doesn't.
+        mariadb: ['11.4', '11.8']
+    services:
+      mariadb:
+        image: mariadb:${{ matrix.mariadb }}
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SQL_TEST_MYSQL_URL: mysql://root:root@127.0.0.1:3306
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm install
+      - name: Generate the Prisma clients
+        run: npm run generate:prisma
+      - name: e2e tests on MariaDB
+        run: npx vitest run --project outbox:mysql-store

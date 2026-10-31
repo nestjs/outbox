@@ -54,7 +54,9 @@ describe(`MySqlOutboxStore through ${mysql2Client.name}`, () => {
     expect(inserts().length).toBeLessThanOrEqual(3);
     expect(inserts().every(({ params }) => params?.length === 2)).toBe(true);
     expect((await claimAll()).map((m) => m.topic)).toEqual(batch.map((m) => m.topic));
-  });
+    // MariaDB's JSON is text: each message's JSON_EXTRACT() reads its statement's document from the start, so a statement
+    // of a megabyte takes tens of seconds there (half a second on MySQL).
+  }, database?.mariadb ? 120_000 : undefined);
 
   describe('a message whose JSON is larger than the sort buffer (262,144 bytes by default)', () => {
     // Well over the 256 KB buffer MySQL sorts a statement's rows in: a row of this size can't be held by that sort.
@@ -312,7 +314,7 @@ describe(`MySqlOutboxStore through ${mysql2Client.name}`, () => {
       }
       await client.executor.execute(
         `INSERT INTO nest_outbox_messages (id, topic, headers, \`key\`, created_at, available_at)
-SELECT CONCAT('m-', n.i), 'order.placed', JSON_OBJECT(), 'order-1', 0, 0 FROM JSON_TABLE(CAST(? AS JSON), '$[*]' COLUMNS (i int PATH '$')) AS n`,
+SELECT CONCAT('m-', n.i), 'order.placed', JSON_OBJECT(), 'order-1', 0, 0 FROM JSON_TABLE(JSON_EXTRACT(?, '$'), '$[*]' COLUMNS (i int PATH '$')) AS n`,
         [JSON.stringify(Array.from({ length: 20_000 }, (_, i) => i + 1))],
       );
     });

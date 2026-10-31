@@ -60,7 +60,7 @@ export class AppModule {}
 
 ## MySQL store
 
-`@nestjs/outbox/mysql` ships `MySqlOutboxStore` (MySQL 8.4 LTS and 9.x), registered the same way: import it and the executor from `@nestjs/outbox/mysql` instead (`fromMysql2(pool)`, `fromDrizzle(db)`, `fromTypeOrm(dataSource)`, `fromPrisma(prisma)` with `@prisma/adapter-mariadb`, or `fromKysely(db)`). Its tables live in your connection's database, named after the `schema` option (`nest_outbox_messages`, `nest_outbox_dead_letters`, `nest_outbox_inbox`); ids, topics, keys and consumer names are compared byte for byte and hold at most 255 characters. `npx @nestjs/outbox migrate --url mysql://...` applies its migrations, and `sql --dialect mysql` prints them (`MySqlOutboxStore.migrationStatements()` lists them one per string, for TypeORM's `queryRunner.query()`).
+`@nestjs/outbox/mysql` ships `MySqlOutboxStore` (MySQL 8.4 LTS and 9.x, and MariaDB 11.4 LTS and later, through a TypeORM DataSource of type `'mysql'` or `'mariadb'` and a `mysql://` URL on the command line), registered the same way: import it and the executor from `@nestjs/outbox/mysql` instead (`fromMysql2(pool)`, `fromDrizzle(db)`, `fromTypeOrm(dataSource)`, `fromPrisma(prisma)` with `@prisma/adapter-mariadb`, or `fromKysely(db)`). Its tables live in your connection's database, named after the `schema` option (`nest_outbox_messages`, `nest_outbox_dead_letters`, `nest_outbox_inbox`); ids, topics, keys and consumer names are compared byte for byte and hold at most 255 characters. `npx @nestjs/outbox migrate --url mysql://...` applies its migrations, and `sql --dialect mysql` prints them (`MySqlOutboxStore.migrationStatements()` lists them one per string, for TypeORM's `queryRunner.query()`).
 
 ## Retention
 
