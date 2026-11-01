@@ -10,9 +10,9 @@ import {
   SqlParams,
   type MigrationSqlOptions,
   type MigrationStatementsOptions,
+  type MySqlStoreReadiness,
   type SqlExecutor,
   type SqlTransaction,
-  type StoreReadiness,
 } from '@nestjs/store-kit/mysql';
 import { OutboxTransactionRequiredError } from '../errors/outbox-transaction-required.error.js';
 import type { OutboxDeadLetter, OutboxDeadLetterFilter, OutboxDeadLetterQuery } from '../interfaces/outbox-dead-letter.interface.js';
@@ -48,6 +48,13 @@ const IDS_PER_STATEMENT = 1_000;
 const BATCH_JSON_LENGTH = 1 << 20;
 
 /**
+ * `BATCH_JSON_LENGTH` on MariaDB, whose JSON is text: each message's `JSON_EXTRACT()` reads its statement's document
+ * from the start, so a statement's time grows with the square of its length (12,000 messages: 29 s at 1 MiB a
+ * statement, 1.4 s at 32 KiB), all of it inside the application's transaction, holding its keys' locks.
+ */
+const MARIADB_BATCH_JSON_LENGTH = 1 << 16;
+
+/**
  * The gap reads one statement of `claim()` carries at most. MySQL's time and memory for a `UNION ALL` grow faster than
  * its branches: one of 10,000 took seconds, and a server with a few GB of memory was killed for it. Statements of 250
  * keep a claim's cost linear in its size. One `JSON_TABLE()` statement of every row would be faster on short keys, but
@@ -56,7 +63,8 @@ const BATCH_JSON_LENGTH = 1 << 20;
 const GAP_READS_PER_STATEMENT = 250;
 
 /**
- * The first-party `OutboxStore` and `OutboxInboxStore` on MySQL (8.4 LTS and 9.x), through the client the application
+ * The first-party `OutboxStore` and `OutboxInboxStore` on MySQL (8.4 LTS and 9.x) and MariaDB (11.4.7 and later, 11.8.2
+ * and later), through the client the application
  * already has (`fromMysql2()`, `fromDrizzle()`, `fromTypeOrm()`, `fromPrisma()`, `fromKysely()`). It keeps the
  * messages, the dead letters and the consumers' inbox in tables of its own in the connection's database
  * (`nest_outbox_messages`, `nest_outbox_dead_letters`, `nest_outbox_inbox`), which its migrations create and bring up to
@@ -145,7 +153,7 @@ export class MySqlOutboxStore implements OutboxStore, OutboxInboxStore, OnModule
   private readonly schema: string;
   private readonly t: Record<'messages' | 'deadLetters' | 'inbox', string>;
   /** The server and the schema checked, the schema migrated (`migrate`), before the first statement. */
-  private readonly readiness: StoreReadiness;
+  private readonly readiness: MySqlStoreReadiness;
   /** The rows of the store's locks, created once the schema is ready (see `ready()`). */
   private lockRows?: Promise<void>;
 
@@ -185,7 +193,10 @@ export class MySqlOutboxStore implements OutboxStore, OutboxInboxStore, OnModule
    * `OutboxTransactionRequiredError`; an id, topic or key longer than 255 characters with a `RangeError`, before any
    * statement. The transaction's database isn't checked: a transaction on another database writes the messages there,
    * where this store's relays don't read them. A deadlock in the application's transaction (MySQL's error 1213) rolled
-   * it back, so it rejects: the application runs its transaction again.
+   * it back, so it rejects: the application runs its transaction again. On MariaDB with `innodb_snapshot_isolation` on
+   * (its default since 11.6.2), a REPEATABLE READ transaction can also fail with 1020 (ER_CHECKREAD) when it locks a
+   * key's bucket another transaction wrote since its snapshot: run that transaction again too, or run the application's
+   * transactions at READ COMMITTED.
    */
   async add(transaction: unknown, messages: readonly OutboxMessage[]): Promise<void> {
     const tx = this.inTransaction(transaction, 'add');
@@ -222,15 +233,18 @@ export class MySqlOutboxStore implements OutboxStore, OutboxInboxStore, OnModule
     // The rows are numbered by a light JSON_TABLE() over a JSON array with one `null` per message, and each message is read
     // from the document by its number. Ordering the messages themselves sorted the rows in a buffer of 256 KB by default
     // (`sort_buffer_size`), which fails ("Out of sort memory") for one of that size. The outer ORDER BY keeps `seq` in the
-    // batch order. `d` parses the document once: JSON_EXTRACT(CAST(? AS JSON), ...) in the lateral table would parse it
-    // for each row.
-    for (const batch of batches(rows)) {
+    // batch order. `d` parses the document once: SqlParams.json()'s JSON_EXTRACT(?, '$') in the lateral table would parse
+    // it for each row. A `null` payload's JSON null becomes SQL NULL against JSON_EXTRACT('null', '$'): MariaDB has no
+    // JSON cast. MariaDB's `d` is the document's text: its JSON is text, with nothing to parse once, and before 11.4.11
+    // and 11.8.7 it cut a JSON function's result short in a derived table (`[{"id": "a"}` for `[{"id":"a"}]`).
+    const mariadb = this.readiness.server === 'mariadb';
+    for (const batch of batches(rows, mariadb ? MARIADB_BATCH_JSON_LENGTH : BATCH_JSON_LENGTH)) {
       const p = new SqlParams();
       await tx.execute(
         `INSERT INTO ${this.t.messages} (id, topic, payload, headers, \`key\`, created_at, available_at, history)
-SELECT j.id, j.topic, NULLIF(j.payload, CAST('null' AS JSON)), j.headers, j.message_key, j.created_at, j.available_at, JSON_ARRAY()
+SELECT j.id, j.topic, NULLIF(j.payload, JSON_EXTRACT('null', '$')), j.headers, j.message_key, j.created_at, j.available_at, JSON_ARRAY()
 FROM (SELECT n FROM JSON_TABLE(${p.json(batch.map(() => null))}, '$[*]' COLUMNS (n FOR ORDINALITY)) AS x) AS o
-CROSS JOIN (SELECT ${p.json(batch)} AS doc) AS d
+CROSS JOIN (SELECT ${mariadb ? p.text(JSON.stringify(batch)) : p.json(batch)} AS doc) AS d
 CROSS JOIN JSON_TABLE(JSON_EXTRACT(d.doc, CONCAT('$[', o.n - 1, ']')), '$' COLUMNS (
   id varchar(255) PATH '$.id' ERROR ON ERROR,
   topic varchar(255) PATH '$.topic' ERROR ON ERROR,
@@ -272,7 +286,8 @@ ORDER BY o.n`,
       // sorted would lock every claimable row, and a prepared statement's plan can differ). The subquery reads the key's
       // messages from its oldest, and stops at the first that is delayed or leased, or at the row itself: a probe as
       // long as the row's place in its key (MySQL doesn't bound an index range by the outer row's `seq`: a
-      // `seq < m.seq` condition would read the whole key).
+      // `seq < m.seq` condition would read the whole key). The locking clause locks `m`'s rows only: a locking read
+      // doesn't lock the rows its subqueries read (`FOR UPDATE OF m` says the same, in a spelling MariaDB doesn't take).
       const p = new SqlParams();
       const due = await tx.query<Row>(
         `SELECT CAST(m.seq AS CHAR) AS seq, ${columns(MESSAGE_COLUMNS, 'm')}
@@ -286,7 +301,7 @@ WHERE m.available_at <= ${p.bigint(at)} AND (m.lease_until IS NULL OR m.lease_un
   ) = m.seq)
 ORDER BY m.seq
 LIMIT ${p.limit(limit)}
-FOR UPDATE OF m SKIP LOCKED`,
+FOR UPDATE SKIP LOCKED`,
         p.values,
       );
       if (due.length === 0) {
@@ -306,9 +321,13 @@ FOR UPDATE OF m SKIP LOCKED`,
         return true;
       });
       if (taken.length > 0) {
+        // The index is pinned: `seq IN (...)` of most of a small table plans as a scan of the whole key, which waits
+        // behind every row another transaction holds where the server doesn't pass over them (MariaDB with
+        // innodb_snapshot_isolation on, its default since 11.6.2, makes no semi-consistent reads). A range of the
+        // primary key reads the rows taken, and no others.
         const u = new SqlParams();
         await tx.execute(
-          `UPDATE ${this.t.messages} SET lease_owner = ${u.text(owner)}, lease_until = ${u.bigint(until)}
+          `UPDATE ${this.t.messages} FORCE INDEX (PRIMARY) SET lease_owner = ${u.text(owner)}, lease_until = ${u.bigint(until)}
 WHERE seq IN (${taken.map((row) => `CAST(${u.text(row.seq)} AS SIGNED)`).join(', ')})`,
           u.values,
         );
@@ -522,7 +541,8 @@ FROM ${this.t.deadLetters} d WHERE ${i.in('d.id', chunk)} ORDER BY d.seq`,
     await this.ready();
     return retryOnDeadlock(this.executor, async (tx) => {
       const p = new SqlParams();
-      const { affectedRows } = await tx.execute(`DELETE FROM ${this.t.deadLetters} AS d WHERE ${this.deadLetterWhere(p, conditions)}`, p.values);
+      // The multi-table form: MariaDB takes an alias in a single-table DELETE only from 11.6.
+      const { affectedRows } = await tx.execute(`DELETE d FROM ${this.t.deadLetters} AS d WHERE ${this.deadLetterWhere(p, conditions)}`, p.values);
       return affectedRows;
     });
   }
@@ -714,14 +734,14 @@ function chunks<T>(values: readonly T[]): T[][] {
   return result;
 }
 
-/** `rows` in consecutive batches whose JSON is at most `BATCH_JSON_LENGTH` long (a larger row goes alone). */
-function batches<T>(rows: readonly T[]): T[][] {
+/** `rows` in consecutive batches whose JSON is at most `maxLength` long (a larger row goes alone). */
+function batches<T>(rows: readonly T[], maxLength: number): T[][] {
   const result: T[][] = [];
   let batch: T[] = [];
   let length = 0;
   for (const row of rows) {
     const size = JSON.stringify(row).length + 1;
-    if (batch.length > 0 && length + size > BATCH_JSON_LENGTH) {
+    if (batch.length > 0 && length + size > maxLength) {
       result.push(batch);
       batch = [];
       length = 0;

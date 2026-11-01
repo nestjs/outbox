@@ -51,7 +51,7 @@ describe(`MySqlOutboxStore through ${mysql2Client.name}`, () => {
     await client.transaction((tx) => store.add(tx, batch));
 
     expect(inserts().length).toBeGreaterThan(1);
-    expect(inserts().length).toBeLessThanOrEqual(3);
+    expect(inserts().length).toBeLessThanOrEqual(database?.mariadb ? 40 : 3);
     expect(inserts().every(({ params }) => params?.length === 2)).toBe(true);
     expect((await claimAll()).map((m) => m.topic)).toEqual(batch.map((m) => m.topic));
   });
@@ -245,6 +245,15 @@ describe(`MySqlOutboxStore through ${mysql2Client.name}`, () => {
     expect(await store.getDeadLetter(full.id)).toMatchObject({ payload, headers: full.headers, history: [failure], lastError: payload.text });
   });
 
+  it('round-trips top-level scalar payloads, keeping the string "null" apart from a null payload', async () => {
+    const batch = (['null', 'x', '', 0, false] as const).map((payload, i) => ({ ...message(`scalar-${i}`), payload }));
+    await client.transaction((tx) => store.add(tx, batch));
+    expect(await rows(database!.admin, 'SELECT payload IS NULL AS missing FROM nest_outbox_messages ORDER BY seq')).toEqual(
+      batch.map(() => ({ missing: 0 })),
+    );
+    expect(await claimAll()).toEqual(batch);
+  });
+
   it('purges dead letters that failed before a moment with a fraction of a millisecond', async () => {
     const m = message('m');
     await client.transaction((tx) => store.add(tx, [m]));
@@ -312,7 +321,7 @@ describe(`MySqlOutboxStore through ${mysql2Client.name}`, () => {
       }
       await client.executor.execute(
         `INSERT INTO nest_outbox_messages (id, topic, headers, \`key\`, created_at, available_at)
-SELECT CONCAT('m-', n.i), 'order.placed', JSON_OBJECT(), 'order-1', 0, 0 FROM JSON_TABLE(CAST(? AS JSON), '$[*]' COLUMNS (i int PATH '$')) AS n`,
+SELECT CONCAT('m-', n.i), 'order.placed', JSON_OBJECT(), 'order-1', 0, 0 FROM JSON_TABLE(JSON_EXTRACT(?, '$'), '$[*]' COLUMNS (i int PATH '$')) AS n`,
         [JSON.stringify(Array.from({ length: 20_000 }, (_, i) => i + 1))],
       );
     });

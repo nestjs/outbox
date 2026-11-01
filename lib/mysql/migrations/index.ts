@@ -13,4 +13,5 @@ export const mysqlOutboxSchema = new StoreSchema({
   defaultSchema: 'nest_outbox',
   migrations: [initialMigration],
   createError: (message, details) => new OutboxSchemaError(message, details),
+  mariadb: true,
 });

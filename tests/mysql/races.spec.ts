@@ -392,7 +392,10 @@ describe(`${mysql2Client.name}: a deadlock in the application's transaction`, ()
     const settled = await rollBackWhileOthersWait(key);
 
     expect(settled.every((outcome) => outcome === 'committed' || outcome === 1213)).toBe(true);
-    expect(settled).toContain(1213);
+    // MariaDB doesn't break these waits with a deadlock: its waiters all commit.
+    if (!database?.mariadb) {
+      expect(settled).toContain(1213);
+    }
     // What the application does with a deadlock: runs its transaction again.
     for (const [i, outcome] of settled.entries()) {
       if (outcome === 1213) {
