@@ -192,7 +192,8 @@ ORDER BY TABLE_NAME, ORDINAL_POSITION`,
     await expect(store('m_taken', { migrate: false }).onModuleInit()).resolves.toBeUndefined();
   });
 
-  it('gives every table a primary key: it migrates with sql_require_primary_key on, as some managed MySQL sets it', async () => {
+  // MySQL's session variable: MariaDB's counterpart (innodb_force_primary_key) is global, and the tests change no server setting.
+  it.skipIf(database?.mariadb)('gives every table a primary key: it migrates with sql_require_primary_key on, as some managed MySQL sets it', async () => {
     const strict = pool();
     strict.on('connection', (connection) => {
       connection.query('SET SESSION sql_require_primary_key = ON');
@@ -298,24 +299,35 @@ describe('options, without a database', () => {
     );
   });
 
-  it('refuse MariaDB, before any SQL of the store', async () => {
-    const statements: string[] = [];
-    const db: SqlTransaction = {
-      query: async <R extends object>(text: string) => {
-        statements.push(text);
-        if (text === 'SELECT VERSION() AS version') {
-          return [{ version: '11.4.2-MariaDB-ubu2404' }] as R[];
-        }
-        throw new Error(`no answer to: ${text}`);
-      },
-      execute: async () => ({ affectedRows: 0 }),
-    };
-    const mariadb = { dialect: 'mysql', ...db, transaction: (work: (tx: SqlTransaction) => Promise<unknown>) => work(db), wrapTransaction: () => db } as SqlExecutor;
-    const refused = new MySqlOutboxStore({ executor: mariadb, schema: 'm_mariadb' });
-    await expect(refused.onModuleInit()).rejects.toThrow(
-      "MySqlOutboxStore runs on MySQL, and this server is MariaDB (11.4.2-MariaDB-ubu2404): MariaDB isn't supported yet.",
-    );
-    expect(statements).toEqual(['SELECT VERSION() AS version']);
+  it('refuse a MariaDB whose utf8mb4_0900_bin is missing (before 11.4.5) or pads (11.4.5, 11.8.0-11.8.1), before any SQL of the store', async () => {
+    for (const [version, padded, problem] of [
+      ['11.4.4-MariaDB-ubu2404', undefined, "doesn't have it"],
+      ['11.4.5-MariaDB-ubu2404', '1', 'pads it, so abc and "abc " would be the same key'],
+    ] as const) {
+      const statements: string[] = [];
+      const db: SqlTransaction = {
+        query: async <R extends object>(text: string) => {
+          statements.push(text);
+          if (text === 'SELECT VERSION() AS version') {
+            return [{ version }] as R[];
+          }
+          if (text.includes('COLLATE utf8mb4_0900_bin')) {
+            if (padded === undefined) {
+              throw Object.assign(new Error("Unknown collation: 'utf8mb4_0900_bin'"), { errno: 1273, sqlState: 'HY000', sqlMessage: "Unknown collation: 'utf8mb4_0900_bin'" });
+            }
+            return [{ padded }] as R[];
+          }
+          throw new Error(`no answer to: ${text}`);
+        },
+        execute: async () => ({ affectedRows: 0 }),
+      };
+      const mariadb = { dialect: 'mysql', ...db, transaction: (work: (tx: SqlTransaction) => Promise<unknown>) => work(db), wrapTransaction: () => db } as SqlExecutor;
+      const refused = new MySqlOutboxStore({ executor: mariadb, schema: 'm_mariadb' });
+      await expect(refused.onModuleInit()).rejects.toThrow(
+        `MySqlOutboxStore runs on MySQL 8.4 LTS and 9.x, and on MariaDB 11.4.7 and later or 11.8.2 and later, where utf8mb4_0900_bin compares without padding, and this server (${version}) ${problem}.`,
+      );
+      expect(statements).toEqual(['SELECT VERSION() AS version', "SELECT CAST(_utf8mb4'abc' = _utf8mb4'abc ' COLLATE utf8mb4_0900_bin AS CHAR) AS padded"]);
+    }
   });
 });
 
