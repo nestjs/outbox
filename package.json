@@ -1,7 +1,19 @@
 {
   "name": "@nestjs/outbox",
   "version": "0.1.4",
-  "description": "Nest - modern, fast, powerful node.js web framework (@outbox)",
+  "description": "Transactional outbox for NestJS: publish events reliably by saving them in the same database transaction as your data, then relaying them with retries.",
+  "keywords": [
+    "nestjs",
+    "nest",
+    "outbox",
+    "transactional-outbox",
+    "inbox",
+    "events",
+    "messaging",
+    "dual-write",
+    "reliable-messaging",
+    "event-driven"
+  ],
   "author": "Kamil Mysliwiec",
   "license": "MIT",
   "url": "https://github.com/nestjs/outbox#readme",
