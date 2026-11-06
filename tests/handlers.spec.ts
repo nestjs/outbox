@@ -271,6 +271,23 @@ describe('@OnOutboxMessage handlers', () => {
       expect(String((events.at(-1) as { error: unknown }).error)).toBe('Error: stream failed');
     });
 
+    it('subscribes to an Observable an async handler resolves to', async () => {
+      const ref = await boot([Fanout], [], { retry: 5 });
+      let subscribed = 0;
+      behaviour.first = async () =>
+        new Observable((subscriber) => {
+          subscribed++;
+          subscriber.complete();
+        });
+
+      expect(await publish(ref, { topic: 'fanout', payload: {} })).toMatchObject({ published: 1 });
+      expect(subscribed).toBe(1);
+
+      behaviour.first = async () => throwError(() => new Error('stream failed'));
+      expect(await publish(ref, { topic: 'fanout', payload: {} })).toMatchObject({ retried: 1 });
+      expect(String((events.at(-1) as { error: unknown }).error)).toBe('Error: stream failed');
+    });
+
     it('dead-letters with the aggregate when every failing handler is permanent', async () => {
       const ref = await boot([Fanout], [], { retry: 5 });
       behaviour.first = () => {

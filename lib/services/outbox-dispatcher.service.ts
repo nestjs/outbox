@@ -166,7 +166,7 @@ export class OutboxDispatcher extends OutboxTransport implements OnModuleInit {
     const invoke = async () => {
       // The relay may have given up on this attempt while it waited behind an earlier one.
       signal.throwIfAborted();
-      const result = entry.invoke(message.payload, context);
+      const result = await entry.invoke(message.payload, context);
       return isObservable(result) ? lastValue(result, signal) : result;
     };
 
