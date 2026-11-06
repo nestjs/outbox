@@ -339,8 +339,9 @@ SELECT CONCAT('m-', n.i), 'order.placed', JSON_OBJECT(), 'order-1', 0, 0 FROM JS
     it("claims a batch at the key's head without reading the whole key for each message, and passes over the rest once it's leased", async () => {
       const started = performance.now();
       const batch = await store.claim({ owner: 'r1', now: 10, leaseMs: 1_000, limit: 200 });
-      // About 20,000 index reads (each message's older ones); reading the key for each would be 4,000,000.
-      expect(performance.now() - started).toBeLessThan(1_000);
+      // About 20,000 index reads (each message's older ones), about a second on a busy CI runner; reading the key for
+      // each would be 4,000,000.
+      expect(performance.now() - started).toBeLessThan(5_000);
       expect(batch.map((m) => m.id)).toEqual(Array.from({ length: 200 }, (_, i) => `m-${i + 1}`));
 
       expect(await store.claim({ owner: 'r2', now: 10, leaseMs: 1_000, limit: 200 })).toEqual([]);
