@@ -93,10 +93,13 @@ export class OutboxDispatcher extends OutboxTransport implements OnModuleInit {
         if (!metadata) {
           continue;
         }
-        if (!wrapper.isDependencyTreeStatic()) {
+        // A transient provider's discovered instance is a placeholder its constructor never ran on.
+        if (!wrapper.isDependencyTreeStatic() || wrapper.isTransient) {
           throw new Error(
             `${wrapper.name}.${method}: @OnOutboxMessage() handlers must be on singleton providers, ` +
-              'and this one is request-scoped (or depends on a request-scoped provider)',
+              (wrapper.isDependencyTreeStatic()
+                ? 'and this one is transient'
+                : 'and this one is request-scoped (or depends on a request-scoped provider)'),
           );
         }
 
