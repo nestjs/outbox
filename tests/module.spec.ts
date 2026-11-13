@@ -305,6 +305,25 @@ describe('OutboxModule configuration', () => {
     ).rejects.toThrow(/ScopedHandlers\.handle: @OnOutboxMessage\(\) handlers must be on singleton providers/);
   });
 
+  it('refuses handlers on transient providers, whose discovered instance was never constructed', async () => {
+    @Injectable()
+    class Mailer {}
+
+    @Injectable({ scope: Scope.TRANSIENT })
+    class TransientHandlers {
+      constructor(readonly mailer: Mailer) {}
+      @OnOutboxMessage('order.placed', { consumer: 'transient' })
+      handle() {}
+    }
+
+    @Module({ providers: [Mailer, TransientHandlers] })
+    class TransientModule {}
+
+    await expect(compile(OutboxModule.forRoot(), TransientModule)).rejects.toThrow(
+      'TransientHandlers.handle: @OnOutboxMessage() handlers must be on singleton providers, and this one is transient',
+    );
+  });
+
   it('reads `retry: false` as a single attempt', async () => {
     const memory = inMemoryDatabase();
     const ref = await compile(
