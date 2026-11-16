@@ -3,7 +3,8 @@
  * through every client, at REPEATABLE READ and READ COMMITTED, published in the order they commit; concurrent claims
  * through every client taking every claimable message between them, a key's run with one owner; a producer's
  * rollback, which burns an AUTO_INCREMENT value the relay never waits for; a claim that meets a key whose head another
- * connection is writing, or rows in the middle of a key's run past the first statement of gap reads; keys that share a
+ * connection is writing, or rows in the middle of a key's run past the first statement of gap reads, or messages a
+ * producer commits while it reads (MariaDB's innodb_snapshot_isolation, ER_CHECKREAD); keys that share a
  * lock bucket (their producers take turns: the false contention, measured), ordered all the same; the lock table's
  * rows, one per bucket, created at startup, however many keys producers churn through; and a producer's rollback while others wait for its bucket, which deadlocks them only when the bucket's row
  * is missing (MySQL's error 1213 in the application's transaction, which runs it again).
@@ -230,6 +231,36 @@ describe(`${mysql2Client.name}: a claim and a write in flight`, () => {
 
     const rest = await store.claim({ owner: 'r2', now: 10, leaseMs: 1_000, limit: 1_000 });
     expect(rest.map((m) => m.topic)).toEqual(['k3', 'k4', 'k5', 'k6', 'k7', 'l2', 'l3']);
+  });
+
+  it('takes the messages a producer commits while it reads (MariaDB with innodb_snapshot_isolation on fails with 1020)', async () => {
+    const { client, store } = opened;
+    // A message of a key first, whose subquery opens the statement's read view, then leased rows the claim reads past
+    // while the producer commits messages after them.
+    await client.transaction((tx) => store.add(tx, [message('first', 'K')]));
+    const leased = Array.from({ length: 20_000 }, (_, i) => message(`leased-${i}`));
+    for (let i = 0; i < leased.length; i += 5_000) {
+      await client.transaction((tx) => store.add(tx, leased.slice(i, i + 5_000)));
+    }
+    await database!.admin.query("UPDATE race_claim_messages SET lease_owner = 'other', lease_until = 9000000000000000 WHERE topic <> 'first'");
+
+    let producing = true;
+    const producer = (async () => {
+      for (let i = 0; producing; i++) {
+        await client.transaction((tx) => store.add(tx, [message(`p${i}`, `P${i % 5}`)]));
+      }
+    })();
+    try {
+      for (let c = 0; c < 20; c++) {
+        const batch = await store.claim({ owner: `r${c}`, now: 10, leaseMs: 60_000, limit: 1_000 });
+        for (const m of batch) {
+          expect(await store.markPublished(m.id, `r${c}`)).toBe(true);
+        }
+      }
+    } finally {
+      producing = false;
+      await producer;
+    }
   });
 });
 

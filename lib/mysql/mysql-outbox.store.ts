@@ -288,9 +288,12 @@ ORDER BY o.n`,
       // long as the row's place in its key (MySQL doesn't bound an index range by the outer row's `seq`: a
       // `seq < m.seq` condition would read the whole key). The locking clause locks `m`'s rows only: a locking read
       // doesn't lock the rows its subqueries read (`FOR UPDATE OF m` says the same, in a spelling MariaDB doesn't take).
+      // On MariaDB the statement runs without innodb_snapshot_isolation (on by default since 11.6.2): the subquery's
+      // read opens a read view, and with it on, the locking read then fails with 1020 (ER_CHECKREAD) on a row a
+      // producer committed since, READ COMMITTED as this transaction is.
       const p = new SqlParams();
       const due = await tx.query<Row>(
-        `SELECT CAST(m.seq AS CHAR) AS seq, ${columns(MESSAGE_COLUMNS, 'm')}
+        `${this.readiness.server === 'mariadb' ? 'SET STATEMENT innodb_snapshot_isolation = OFF FOR ' : ''}SELECT CAST(m.seq AS CHAR) AS seq, ${columns(MESSAGE_COLUMNS, 'm')}
 FROM ${this.t.messages} m FORCE INDEX (PRIMARY)
 WHERE m.available_at <= ${p.bigint(at)} AND (m.lease_until IS NULL OR m.lease_until <= ${p.bigint(at)})
   AND (m.\`key\` IS NULL OR (

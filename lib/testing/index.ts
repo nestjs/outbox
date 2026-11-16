@@ -467,24 +467,29 @@ const CONCURRENT: [string, (h: Harness<any>) => Promise<void>][] = [
     'publishes a key in commit order when producers overlap',
     async (h) => {
       // T1 adds a1 and keeps its transaction open; T2 adds the key's next message meanwhile.
-      // Commit order is the order the two transactions finish in. A store that numbers rows
-      // at insert without serializing the key's producers lets T2 commit first and still
-      // publishes a1 first.
+      // A store that numbers rows at insert without serializing the key's producers lets T2
+      // commit first and still publishes a1 first. T1 commits only once it is let go: a T2
+      // done by then committed first, and one still running waits for T1. The order the two
+      // commits are acknowledged in doesn't tell: on a busy server, a T2 that waited for T1's
+      // lock can be acknowledged before T1.
       const [a1, a2, b1] = [message('a1', 'A'), message('a2', 'A'), message('b1', 'B')];
-      const committed: string[] = [];
       const added = deferred();
       const finish = deferred();
+      let t2Done = false;
 
-      const t1 = h
-        .transaction(async (tx) => {
-          await h.store.add(tx, [a1]);
-          added.resolve();
-          await finish.promise;
-        })
-        .then(() => committed.push('a1'));
+      const t1 = h.transaction(async (tx) => {
+        await h.store.add(tx, [a1]);
+        added.resolve();
+        await finish.promise;
+      });
       await added.promise;
-      const t2 = h.transaction((tx) => Promise.resolve(h.store.add(tx, [b1, a2]))).then(() => committed.push('a2'));
+      const t2 = h
+        .transaction((tx) => Promise.resolve(h.store.add(tx, [b1, a2])))
+        .then(() => {
+          t2Done = true;
+        });
       await sleep(150);
+      const committed = t2Done ? ['a2', 'a1'] : ['a1', 'a2'];
       finish.resolve();
       await Promise.all([t1, t2]);
 
