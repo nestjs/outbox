@@ -43,21 +43,21 @@ describe('nest-outbox, for MySQL', () => {
       const url = database!.url;
       expect(await run(['status', '--url', url, '--schema', 'cli_outbox'])).toEqual({
         code: 1,
-        out: 'Schema "cli_outbox" is at version 0; this version of @nestjs/outbox needs version 1.\n',
+        out: 'Schema "cli_outbox" is at version 0; this version of @nestjs/outbox needs version 2.\n',
         err: '',
       });
       expect(await run(['migrate', '--schema', 'cli_outbox'], { DATABASE_URL: url })).toEqual({
         code: 0,
-        out: 'Migrated schema "cli_outbox" to version 1 (applied 1).\n',
+        out: 'Migrated schema "cli_outbox" to version 2 (applied 1, 2).\n',
         err: '',
       });
-      expect(await run(['migrate', '--url', url, '--schema', 'cli_outbox'])).toEqual({ code: 0, out: 'Schema "cli_outbox" is up to date (version 1).\n', err: '' });
+      expect(await run(['migrate', '--url', url, '--schema', 'cli_outbox'])).toEqual({ code: 0, out: 'Schema "cli_outbox" is up to date (version 2).\n', err: '' });
       expect(await run(['status', '--url', url, '--schema', 'cli_outbox'])).toEqual({
         code: 0,
-        out: 'Schema "cli_outbox" is at version 1; this version of @nestjs/outbox needs version 1.\n',
+        out: 'Schema "cli_outbox" is at version 2; this version of @nestjs/outbox needs version 2.\n',
         err: '',
       });
-      expect(await rows(database!.admin, 'SELECT version FROM cli_outbox_migrations')).toEqual([{ version: 1 }]);
+      expect(await rows(database!.admin, 'SELECT version FROM cli_outbox_migrations')).toEqual([{ version: 1 }, { version: 2 }]);
 
       const store = new MySqlOutboxStore({ executor: fromMysql2(database!.admin), schema: 'cli_outbox', migrate: false });
       await expect(store.onModuleInit()).resolves.toBeUndefined();
@@ -69,7 +69,7 @@ describe('nest-outbox, for MySQL', () => {
         code: 1,
         out: '',
         err:
-          'MySqlOutboxStore: migrating schema "cli_taken" from version 0 to 1 stopped at migration 1 (initial), statement 1 of 3: ' +
+          'MySqlOutboxStore: migrating schema "cli_taken" from version 0 to 2 stopped at migration 1 (initial), statement 1 of 3: ' +
           "Table 'cli_taken_messages' already exists. The statements before it are applied, and migrating again resumes at it.\n",
       });
     });

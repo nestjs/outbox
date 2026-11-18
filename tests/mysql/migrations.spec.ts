@@ -89,26 +89,27 @@ describe('migrate()', () => {
 
   it("creates the store's tables, the kit's, and the version record on a new database, and applies nothing the second time", async () => {
     const first = store('m_fresh');
-    expect(await first.migrate()).toEqual([1]);
+    expect(await first.migrate()).toEqual([1, 2]);
     expect(await tables('m_fresh')).toEqual(['m_fresh_dead_letters', 'm_fresh_inbox', 'm_fresh_locks', 'm_fresh_messages', 'm_fresh_migrations']);
     expect(await admin('SELECT version, name, started, applied, applied_at > 0 AS stamped FROM m_fresh_migrations')).toEqual([
       { version: 1, name: 'initial', started: 3, applied: 3, stamped: 1 },
+      { version: 2, name: 'topic_index', started: 1, applied: 1, stamped: 1 },
     ]);
-    expect(MySqlOutboxStore.schemaVersion).toBe(1);
+    expect(MySqlOutboxStore.schemaVersion).toBe(2);
 
     expect(await first.migrate()).toEqual([]);
     expect(await store('m_fresh').migrate()).toEqual([]);
-    expect(await admin('SELECT COUNT(*) AS n FROM m_fresh_migrations')).toEqual([{ n: 1 }]);
+    expect(await admin('SELECT COUNT(*) AS n FROM m_fresh_migrations')).toEqual([{ n: 2 }]);
     await expect(store('m_fresh', { migrate: false }).onModuleInit()).resolves.toBeUndefined();
   });
 
   it('applies the migrations once when processes start together, each on a connection of its own', async () => {
     const applied = await Promise.all(Array.from({ length: 4 }, () => store('m_together').migrate()));
-    expect(applied.filter((versions) => versions.length > 0)).toEqual([[1]]);
+    expect(applied.filter((versions) => versions.length > 0)).toEqual([[1, 2]]);
 
     const starting = Array.from({ length: 4 }, () => store('m_starting'));
     await Promise.all(starting.map((s) => s.onModuleInit()));
-    expect(await admin('SELECT version FROM m_starting_migrations')).toEqual([{ version: 1 }]);
+    expect(await admin('SELECT version FROM m_starting_migrations')).toEqual([{ version: 1 }, { version: 2 }]);
     expect(await starting[3]!.recordInbox(undefined, 'billing', 'm-1', 1)).toBe(true);
   });
 
@@ -118,9 +119,9 @@ describe('migrate()', () => {
     const statements = MySqlOutboxStore.migrationStatements({ schema: 'm_migrated' });
     expect(statements).toEqual(mysqlOutboxSchema.statements({ schema: 'm_migrated' }));
     expect(ddl(recorder.statements)).toEqual(statements.filter((statement) => !statement.startsWith('INSERT')));
-    expect(statements.at(-1)).toBe("INSERT INTO `m_migrated_migrations` (version, name, applied_at) VALUES (1, 'initial', UNIX_TIMESTAMP() * 1000)");
+    expect(statements.at(-1)).toBe("INSERT INTO `m_migrated_migrations` (version, name, applied_at) VALUES (2, 'topic_index', UNIX_TIMESTAMP() * 1000)");
     expect(MySqlOutboxStore.migrationSql({ schema: 'm_migrated' })).toBe(
-      `-- @nestjs/outbox: MySqlOutboxStore's schema "m_migrated" (tables m_migrated_*), from version 0 to 1.\n` +
+      `-- @nestjs/outbox: MySqlOutboxStore's schema "m_migrated" (tables m_migrated_*), from version 0 to 2.\n` +
         "-- The statements don't run in one transaction: MySQL commits each DDL statement on its own. Apply them in order, each once.\n\n" +
         `${statements.map((statement) => `${statement};`).join('\n\n')}\n`,
     );
@@ -157,6 +158,7 @@ GROUP BY TABLE_NAME, INDEX_NAME`,
       { table_name: 'm_indexes_messages', index_name: 'PRIMARY', columns: 'seq', non_unique: 0 },
       { table_name: 'm_indexes_messages', index_name: 'messages_id', columns: 'id', non_unique: 0 },
       { table_name: 'm_indexes_messages', index_name: 'messages_key_seq', columns: 'key,seq', non_unique: 1 },
+      { table_name: 'm_indexes_messages', index_name: 'messages_topic_seq', columns: 'topic,seq', non_unique: 1 },
     ]);
     const text = await admin<{ table_name: string; column_name: string; collation_name: string; length: number }>(
       `SELECT TABLE_NAME AS table_name, COLUMN_NAME AS column_name, COLLATION_NAME AS collation_name, CHARACTER_MAXIMUM_LENGTH AS length
@@ -175,9 +177,9 @@ ORDER BY TABLE_NAME, ORDINAL_POSITION`,
     await admin('CREATE TABLE m_taken_inbox (id int NOT NULL PRIMARY KEY)');
     const error = await store('m_taken').migrate().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OutboxSchemaError);
-    expect(error).toMatchObject({ schema: 'm_taken', version: 0, requiredVersion: 1, cause: { errno: 1050 } });
+    expect(error).toMatchObject({ schema: 'm_taken', version: 0, requiredVersion: 2, cause: { errno: 1050 } });
     expect((error as Error).message).toBe(
-      'MySqlOutboxStore: migrating schema "m_taken" from version 0 to 1 stopped at migration 1 (initial), statement 3 of 3: ' +
+      'MySqlOutboxStore: migrating schema "m_taken" from version 0 to 2 stopped at migration 1 (initial), statement 3 of 3: ' +
         "Table 'm_taken_inbox' already exists. The statements before it are applied, and migrating again resumes at it.",
     );
     expect(await admin('SELECT started, applied, applied_at FROM m_taken_migrations WHERE version = 1')).toEqual([{ started: 2, applied: 2, applied_at: null }]);
@@ -185,9 +187,10 @@ ORDER BY TABLE_NAME, ORDINAL_POSITION`,
 
     await admin('DROP TABLE m_taken_inbox');
     const recorder = recording(fromMysql2(pool()));
-    expect(await store('m_taken', { executor: recorder.executor }).migrate()).toEqual([1]);
+    expect(await store('m_taken', { executor: recorder.executor }).migrate()).toEqual([1, 2]);
     expect(ddl(recorder.statements).filter((text) => !text.startsWith('CREATE TABLE IF NOT EXISTS'))).toEqual([
       mysqlOutboxSchema.statements({ schema: 'm_taken' })[4],
+      'CREATE INDEX messages_topic_seq ON `m_taken_messages` (topic, seq)',
     ]);
     await expect(store('m_taken', { migrate: false }).onModuleInit()).resolves.toBeUndefined();
   });
@@ -198,7 +201,7 @@ ORDER BY TABLE_NAME, ORDINAL_POSITION`,
     strict.on('connection', (connection) => {
       connection.query('SET SESSION sql_require_primary_key = ON');
     });
-    expect(await store('m_keyed', { executor: fromMysql2(strict) }).migrate()).toEqual([1]);
+    expect(await store('m_keyed', { executor: fromMysql2(strict) }).migrate()).toEqual([1, 2]);
   });
 });
 
@@ -213,9 +216,9 @@ describe('a schema behind the code', () => {
     // One class for both dialects' stores, from their subpaths, not the package's root.
     expect(OutboxSchemaError).toBe(PostgresOutboxSchemaError);
     expect('OutboxSchemaError' in root).toBe(false);
-    expect(error).toMatchObject({ name: 'OutboxSchemaError', schema: 'm_behind', version: 0, requiredVersion: 1 });
+    expect(error).toMatchObject({ name: 'OutboxSchemaError', schema: 'm_behind', version: 0, requiredVersion: 2 });
     expect((error as Error).message).toBe(
-      'MySqlOutboxStore: schema "m_behind" is at version 0, and this version of @nestjs/outbox needs version 1. Apply its migrations: ' +
+      'MySqlOutboxStore: schema "m_behind" is at version 0, and this version of @nestjs/outbox needs version 2. Apply its migrations: ' +
         'set `migrate: true` to apply them at startup, run `npx @nestjs/outbox migrate --url <database url> --schema m_behind`, ' +
         "or apply `MySqlOutboxStore.migrationSql({ schema: 'm_behind', from: 0 })` with your migration tool.",
     );
@@ -230,7 +233,7 @@ describe('a schema behind the code', () => {
 
   it('serves a schema ahead of the code, which a newer version of the package migrated during a rolling deploy', async () => {
     await store('m_ahead').migrate();
-    await admin("INSERT INTO m_ahead_migrations (version, name, applied_at) VALUES (2, 'newer', 1)");
+    await admin("INSERT INTO m_ahead_migrations (version, name, applied_at) VALUES (3, 'newer', 1)");
 
     const older = store('m_ahead', { migrate: false });
     await expect(older.onModuleInit()).resolves.toBeUndefined();
@@ -334,19 +337,23 @@ describe('options, without a database', () => {
 describe('migrationSql() and migrationStatements()', () => {
   it("print the default schema from a new database, a range of versions, and never a downgrade", () => {
     const script = MySqlOutboxStore.migrationSql();
-    expect(script).toMatch(/^-- @nestjs\/outbox: MySqlOutboxStore's schema "nest_outbox" \(tables nest_outbox_\*\), from version 0 to 1\.\n/);
+    expect(script).toMatch(/^-- @nestjs\/outbox: MySqlOutboxStore's schema "nest_outbox" \(tables nest_outbox_\*\), from version 0 to 2\.\n/);
     for (const table of ['migrations', 'locks']) {
       expect(script).toContain(`CREATE TABLE IF NOT EXISTS \`nest_outbox_${table}\` (`);
     }
     for (const table of ['messages', 'dead_letters', 'inbox']) {
       expect(script).toContain(`CREATE TABLE \`nest_outbox_${table}\` (`);
     }
-    expect(MySqlOutboxStore.migrationStatements({ from: 1 })).toEqual([]);
+    expect(MySqlOutboxStore.migrationStatements({ from: 1 })).toEqual([
+      'CREATE INDEX messages_topic_seq ON `nest_outbox_messages` (topic, seq)',
+      "INSERT INTO `nest_outbox_migrations` (version, name, applied_at) VALUES (2, 'topic_index', UNIX_TIMESTAMP() * 1000)",
+    ]);
+    expect(MySqlOutboxStore.migrationStatements({ from: 2 })).toEqual([]);
     expect(MySqlOutboxStore.migrationSql({ statementBreakpoints: true }).split('\n--> statement-breakpoint\n')).toHaveLength(MySqlOutboxStore.migrationStatements().length);
 
     expect(() => MySqlOutboxStore.migrationSql({ from: 1, to: 0 })).toThrow(RangeError);
     expect(() => MySqlOutboxStore.migrationSql({ from: 1, to: 0 })).toThrow("downgrades aren't supported");
-    expect(() => MySqlOutboxStore.migrationStatements({ to: 2 })).toThrow('no migrations lead from version 0 to 2');
+    expect(() => MySqlOutboxStore.migrationStatements({ to: 3 })).toThrow('no migrations lead from version 0 to 3');
   });
 });
 
@@ -408,7 +415,7 @@ describe('a first call inside the application transaction, on a pool of one conn
 
     const unmigrated = new MySqlOutboxStore({ executor, schema: 'm_first' });
     await expect(inTransaction((tx) => unmigrated.add(tx, [message('order.placed')]))).rejects.toThrow(
-      "is at version 0, and this version of @nestjs/outbox needs version 1. The store applies its migrations when the application starts (onModuleInit), or at its first call outside a transaction: it can't apply them in yours.",
+      "is at version 0, and this version of @nestjs/outbox needs version 2. The store applies its migrations when the application starts (onModuleInit), or at its first call outside a transaction: it can't apply them in yours.",
     );
     await expect(inTransaction((tx) => unmigrated.recordInbox(tx, 'billing', 'm-1', 1))).rejects.toThrow(OutboxSchemaError);
 
