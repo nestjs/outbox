@@ -50,6 +50,8 @@ model OutboxMessage {
 
   /// A key's older messages, for the claim's per-key check.
   @@index([key, seq], map: "outbox_messages_key_seq")
+  /// A topic's messages in order, for a view of its backlog.
+  @@index([topic, seq], map: "outbox_messages_topic_seq")
   @@map("outbox_messages")
 }
 

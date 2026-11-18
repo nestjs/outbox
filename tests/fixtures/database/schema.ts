@@ -42,8 +42,12 @@ export const outboxMessages = pgTable(
     leaseOwner: text('lease_owner'),
     leaseUntil: timestamp('lease_until', { withTimezone: true }),
   },
-  // A key's older messages, for the claim's per-key check.
-  (table) => [index('outbox_messages_key_seq').on(table.key, table.seq)],
+  (table) => [
+    // A key's older messages, for the claim's per-key check.
+    index('outbox_messages_key_seq').on(table.key, table.seq),
+    // A topic's messages in order, for a view of its backlog.
+    index('outbox_messages_topic_seq').on(table.topic, table.seq),
+  ],
 );
 
 export const outboxDeadLetters = pgTable(

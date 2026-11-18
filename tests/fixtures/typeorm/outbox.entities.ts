@@ -11,6 +11,8 @@ export type Json = object | string | number | boolean | null;
 @Entity('outbox_messages')
 // A key's older messages, for the claim's per-key check.
 @Index('outbox_messages_key_seq', ['key', 'seq'])
+// A topic's messages in order, for a view of its backlog.
+@Index('outbox_messages_topic_seq', ['topic', 'seq'])
 export class OutboxMessageEntity {
   /** Order within a key: numbered at insert, in commit order (TypeOrmOutboxStore.add() locks the key). */
   @PrimaryGeneratedColumn('identity', { type: 'bigint', generatedIdentity: 'BY DEFAULT' })
