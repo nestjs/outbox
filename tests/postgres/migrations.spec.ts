@@ -107,25 +107,28 @@ describe('migrate()', () => {
 
   it('creates the schema, its tables and the version record on a new database, and applies nothing the second time', async () => {
     const first = store('m_fresh');
-    expect(await first.migrate()).toEqual([1]);
+    expect(await first.migrate()).toEqual([1, 2]);
     expect(await tables('m_fresh')).toEqual(['dead_letters', 'inbox', 'messages', 'migrations']);
-    expect(await rows('SELECT version, name FROM m_fresh.migrations')).toEqual([{ version: 1, name: 'initial' }]);
-    expect(PostgresOutboxStore.schemaVersion).toBe(1);
+    expect(await rows('SELECT version, name FROM m_fresh.migrations')).toEqual([
+      { version: 1, name: 'initial' },
+      { version: 2, name: 'topic_index' },
+    ]);
+    expect(PostgresOutboxStore.schemaVersion).toBe(2);
 
     expect(await first.migrate()).toEqual([]);
     expect(await store('m_fresh').migrate()).toEqual([]);
-    expect(await rows('SELECT count(*)::int AS n FROM m_fresh.migrations')).toEqual([{ n: 1 }]);
+    expect(await rows('SELECT count(*)::int AS n FROM m_fresh.migrations')).toEqual([{ n: 2 }]);
     await expect(store('m_fresh', { migrate: false }).onModuleInit()).resolves.toBeUndefined();
   });
 
   it('applies the migrations once when processes start together, each on its own connections', async () => {
     const stores = Array.from({ length: 8 }, () => store('m_together'));
     const applied = await Promise.all(stores.map((s) => s.migrate()));
-    expect(applied.filter((versions) => versions.length > 0)).toEqual([[1]]);
+    expect(applied.filter((versions) => versions.length > 0)).toEqual([[1, 2]]);
 
     const starting = Array.from({ length: 8 }, () => store('m_starting'));
     await Promise.all(starting.map((s) => s.onModuleInit()));
-    expect(await rows('SELECT version FROM m_starting.migrations')).toEqual([{ version: 1 }]);
+    expect(await rows('SELECT version FROM m_starting.migrations')).toEqual([{ version: 1 }, { version: 2 }]);
     expect(await starting[3]!.recordInbox(undefined, 'billing', 'm-1', 1)).toBe(true);
   });
 
@@ -138,7 +141,7 @@ describe('migrate()', () => {
     });
     const script = PostgresOutboxStore.migrationSql({ schema: 'm_migrated' });
     expect(script).toBe(
-      `-- @nestjs/outbox: PostgresOutboxStore's schema "m_migrated", from version 0 to 1.\n-- Run it in one transaction.\n\n` +
+      `-- @nestjs/outbox: PostgresOutboxStore's schema "m_migrated", from version 0 to 2.\n-- Run it in one transaction.\n\n` +
         `${changes(recorder.statements).map((statement) => `${statement};`).join('\n\n')}\n`,
     );
     expect(changes(recorder.statements)).toEqual(postgresOutboxSchema.statements({ schema: 'm_migrated' }));
@@ -171,6 +174,7 @@ describe('migrate()', () => {
         indexdef: 'CREATE INDEX messages_key_seq ON m_indexes.messages USING btree (key, seq) WHERE (key IS NOT NULL)',
       },
       { indexname: 'messages_pkey', indexdef: 'CREATE UNIQUE INDEX messages_pkey ON m_indexes.messages USING btree (seq)' },
+      { indexname: 'messages_topic_seq', indexdef: 'CREATE INDEX messages_topic_seq ON m_indexes.messages USING btree (topic, seq)' },
     ]);
   });
 
@@ -196,9 +200,9 @@ describe('migrate()', () => {
     await rows('CREATE TABLE m_taken.inbox (id serial PRIMARY KEY)');
     const error = await store('m_taken').migrate().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OutboxSchemaError);
-    expect(error).toMatchObject({ schema: 'm_taken', version: 0, requiredVersion: 1, cause: { message: 'relation "inbox" already exists' } });
+    expect(error).toMatchObject({ schema: 'm_taken', version: 0, requiredVersion: 2, cause: { message: 'relation "inbox" already exists' } });
     expect((error as Error).message).toBe(
-      'PostgresOutboxStore: migrating schema "m_taken" from version 0 to 1 failed, and nothing was applied: relation "inbox" already exists',
+      'PostgresOutboxStore: migrating schema "m_taken" from version 0 to 2 failed, and nothing was applied: relation "inbox" already exists',
     );
     expect(await tables('m_taken')).toEqual(['inbox']);
   });
@@ -214,9 +218,9 @@ describe('a schema behind the code', () => {
     expect(error).toBeInstanceOf(root.OutboxError);
     // The stores' subpaths export it (/postgres and /mysql), not the package's root.
     expect('OutboxSchemaError' in root).toBe(false);
-    expect(error).toMatchObject({ name: 'OutboxSchemaError', schema: 'm_behind', version: 0, requiredVersion: 1 });
+    expect(error).toMatchObject({ name: 'OutboxSchemaError', schema: 'm_behind', version: 0, requiredVersion: 2 });
     expect((error as Error).message).toBe(
-      'PostgresOutboxStore: schema "m_behind" is at version 0, and this version of @nestjs/outbox needs version 1. Apply its migrations: ' +
+      'PostgresOutboxStore: schema "m_behind" is at version 0, and this version of @nestjs/outbox needs version 2. Apply its migrations: ' +
         'set `migrate: true` to apply them at startup, run `npx @nestjs/outbox migrate --url <database url> --schema m_behind`, ' +
         "or apply `PostgresOutboxStore.migrationSql({ schema: 'm_behind', from: 0 })` with your migration tool.",
     );
@@ -231,7 +235,7 @@ describe('a schema behind the code', () => {
 
   it('serves a schema ahead of the code, which a newer version of the package migrated during a rolling deploy', async () => {
     await store('m_ahead').migrate();
-    await rows("INSERT INTO m_ahead.migrations (version, name) VALUES (2, 'newer')");
+    await rows("INSERT INTO m_ahead.migrations (version, name) VALUES (3, 'newer')");
 
     const older = store('m_ahead', { migrate: false });
     await expect(older.onModuleInit()).resolves.toBeUndefined();
@@ -274,7 +278,7 @@ describe('options', () => {
       expect(() => new PostgresOutboxStore({ executor: fromPg(pool()), schema })).toThrow(TypeError);
       expect(() => PostgresOutboxStore.migrationSql({ schema })).toThrow(`PostgresOutboxStore: invalid schema ${JSON.stringify(schema)}.`);
     }
-    expect(await store('Mixed_Case').migrate()).toEqual([1]);
+    expect(await store('Mixed_Case').migrate()).toEqual([1, 2]);
     expect(await tables('Mixed_Case')).toContain('messages');
   });
 
@@ -308,14 +312,17 @@ describe('options', () => {
 describe('migrationSql()', () => {
   it('prints the default schema from a new database, a range of versions, and never a downgrade', () => {
     const script = PostgresOutboxStore.migrationSql();
-    expect(script).toMatch(/^-- @nestjs\/outbox: PostgresOutboxStore's schema "nest_outbox", from version 0 to 1\.\n/);
+    expect(script).toMatch(/^-- @nestjs\/outbox: PostgresOutboxStore's schema "nest_outbox", from version 0 to 2\.\n/);
     expect(script).toContain('CREATE SCHEMA IF NOT EXISTS "nest_outbox";');
     expect(script).toContain(`INSERT INTO "nest_outbox".migrations (version, name) VALUES (1, 'initial');`);
-    expect(PostgresOutboxStore.migrationSql({ from: 1 })).not.toContain('CREATE');
+    expect(script).toContain(`INSERT INTO "nest_outbox".migrations (version, name) VALUES (2, 'topic_index');`);
+    expect(PostgresOutboxStore.migrationSql({ from: 1 })).not.toContain('CREATE SCHEMA');
+    expect(PostgresOutboxStore.migrationSql({ from: 1 })).not.toContain('CREATE TABLE');
+    expect(PostgresOutboxStore.migrationSql({ from: 2 })).not.toContain('CREATE');
 
     expect(() => PostgresOutboxStore.migrationSql({ from: 1, to: 0 })).toThrow(RangeError);
     expect(() => PostgresOutboxStore.migrationSql({ from: 1, to: 0 })).toThrow("downgrades aren't supported");
-    expect(() => PostgresOutboxStore.migrationSql({ to: 2 })).toThrow('no migrations lead from version 0 to 2');
+    expect(() => PostgresOutboxStore.migrationSql({ to: 3 })).toThrow('no migrations lead from version 0 to 3');
     expect(() => PostgresOutboxStore.migrationSql({ from: -1 })).toThrow(RangeError);
   });
 });
@@ -358,7 +365,7 @@ describe('a first call inside the application transaction, on PGlite', () => {
     try {
       const unmigrated = new PostgresOutboxStore({ executor: fromDrizzle(db) });
       await expect(db.transaction((tx) => unmigrated.add(tx, [message('order.placed')]))).rejects.toThrow(
-        "is at version 0, and this version of @nestjs/outbox needs version 1. The store applies its migrations when the application starts (onModuleInit), or at its first call outside a transaction: it can't apply them in yours.",
+        "is at version 0, and this version of @nestjs/outbox needs version 2. The store applies its migrations when the application starts (onModuleInit), or at its first call outside a transaction: it can't apply them in yours.",
       );
       await expect(db.transaction((tx) => unmigrated.recordInbox(tx, 'billing', 'm-1', 1))).rejects.toThrow(OutboxSchemaError);
 

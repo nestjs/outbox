@@ -1,6 +1,7 @@
 import { StoreSchema } from '@nestjs/store-kit/postgres';
 import { OutboxSchemaError } from '../../sql/outbox-schema.error.js';
 import { initialMigration } from './initial.migration.js';
+import { topicIndexMigration } from './topic-index.migration.js';
 
 /**
  * PostgresOutboxStore's schema: every version of it, in order (a new one goes last, and none ever changes once
@@ -11,6 +12,6 @@ export const postgresOutboxSchema = new StoreSchema({
   storeName: 'PostgresOutboxStore',
   command: 'nest-outbox',
   defaultSchema: 'nest_outbox',
-  migrations: [initialMigration],
+  migrations: [initialMigration, topicIndexMigration],
   createError: (message, details) => new OutboxSchemaError(message, details),
 });

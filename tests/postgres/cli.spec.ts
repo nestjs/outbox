@@ -68,21 +68,21 @@ describe('nest-outbox', () => {
       const url = database!.url;
       expect(await run(['status', '--url', url, '--schema', 'cli_outbox'])).toEqual({
         code: 1,
-        out: 'Schema "cli_outbox" is at version 0; this version of @nestjs/outbox needs version 1.\n',
+        out: 'Schema "cli_outbox" is at version 0; this version of @nestjs/outbox needs version 2.\n',
         err: '',
       });
       expect(await run(['migrate', '--schema', 'cli_outbox'], { DATABASE_URL: url })).toEqual({
         code: 0,
-        out: 'Migrated schema "cli_outbox" to version 1 (applied 1).\n',
+        out: 'Migrated schema "cli_outbox" to version 2 (applied 1, 2).\n',
         err: '',
       });
-      expect(await run(['migrate', '--url', url, '--schema', 'cli_outbox'])).toEqual({ code: 0, out: 'Schema "cli_outbox" is up to date (version 1).\n', err: '' });
+      expect(await run(['migrate', '--url', url, '--schema', 'cli_outbox'])).toEqual({ code: 0, out: 'Schema "cli_outbox" is up to date (version 2).\n', err: '' });
       expect(await run(['status', '--url', url, '--schema', 'cli_outbox'])).toEqual({
         code: 0,
-        out: 'Schema "cli_outbox" is at version 1; this version of @nestjs/outbox needs version 1.\n',
+        out: 'Schema "cli_outbox" is at version 2; this version of @nestjs/outbox needs version 2.\n',
         err: '',
       });
-      expect(await database!.admin.query('SELECT version FROM cli_outbox.migrations')).toMatchObject({ rows: [{ version: 1 }] });
+      expect(await database!.admin.query('SELECT version FROM cli_outbox.migrations')).toMatchObject({ rows: [{ version: 1 }, { version: 2 }] });
 
       const store = new PostgresOutboxStore({ executor: fromPg(database!.admin), schema: 'cli_outbox', migrate: false });
       await expect(store.onModuleInit()).resolves.toBeUndefined();
@@ -94,7 +94,7 @@ describe('nest-outbox', () => {
       expect(await run(['migrate', '--url', database!.url, '--schema', 'cli_taken'])).toEqual({
         code: 1,
         out: '',
-        err: 'PostgresOutboxStore: migrating schema "cli_taken" from version 0 to 1 failed, and nothing was applied: relation "messages" already exists\n',
+        err: 'PostgresOutboxStore: migrating schema "cli_taken" from version 0 to 2 failed, and nothing was applied: relation "messages" already exists\n',
       });
     });
   });
