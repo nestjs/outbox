@@ -28,7 +28,7 @@ jobs:
         nestjs-version: ['11', '12']
     services:
       postgres:
-        image: postgres:18.6
+        image: postgres:18.7
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
