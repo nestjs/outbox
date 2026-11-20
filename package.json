@@ -101,7 +101,7 @@
     "typeorm": "1.1.3",
     "typescript": "7.0.2",
     "vite": "8.3.8",
-    "vitest": "5.1.0"
+    "vitest": "5.1.1"
   },
   "peerDependencies": {
     "@nestjs/common": "^11.0.0 || ^12.0.0",
